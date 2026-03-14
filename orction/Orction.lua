@@ -33,11 +33,9 @@ local function Orction_UpdateItemSlot()
     if name then
         OrctionItemTexture:SetTexture(texture)
         OrctionItemTexture:Show()
-        OrctionItemName:SetText(name)
         Orction_UpdateDeposit()
     else
         OrctionItemTexture:Hide()
-        OrctionItemName:SetText("Drag an item here")
         OrctionDepositValue:SetText("--")
     end
 end
@@ -73,24 +71,20 @@ local function Orction_BuildAHPanel()
 
     OrctionAHPanel:Hide()
 
-    -- ── Left panel: all elements within x = 0-150 ────────────────────────
-    -- Anchored from TOPLEFT, stacked vertically
+    -- ── Left panel: absolute positions cloned from AuctionFrameAuctions children ─
+    -- All SetPoint anchors are relative to OrctionAHPanel TOPLEFT (= AuctionFrame TOPLEFT).
+    -- x/y values match the dump output so elements land on the same background areas.
 
-    local X       = 29   -- left margin
-    local Y       = -115 -- top of content (below AH title bar)
-    local LABEL_H = 16   -- font string height
-    local GAP     = 8    -- gap between label and its input
-    local ROW_SEP = 10   -- gap between rows
-
-    -- Item slot
+    -- Item slot  (Blizzard AuctionsItemButton: x=27 y=98 w=37 h=37)
+    -- We use 52x52; shift left by 8px so the slot is centred over the same spot.
     local itemLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
-    itemLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", X, Y)
+    itemLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 27, -78)
     itemLabel:SetText("Auction Item")
 
     local itemSlot = CreateFrame("Button", "OrctionItemSlot", OrctionAHPanel)
-    itemSlot:SetWidth(64)
-    itemSlot:SetHeight(64)
-    itemSlot:SetPoint("TOPLEFT", itemLabel, "BOTTOMLEFT", 0, -GAP)
+    itemSlot:SetWidth(60)
+    itemSlot:SetHeight(60)
+    itemSlot:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 27, -95)
     itemSlot:RegisterForDrag("LeftButton")
     itemSlot:EnableMouse(true)
 
@@ -99,16 +93,11 @@ local function Orction_BuildAHPanel()
     slotBg:SetAllPoints()
 
     OrctionItemTexture = itemSlot:CreateTexture("OrctionItemTexture", "ARTWORK")
-    OrctionItemTexture:SetWidth(64)
-    OrctionItemTexture:SetHeight(64)
+    OrctionItemTexture:SetWidth(38)
+    OrctionItemTexture:SetHeight(38)
     OrctionItemTexture:SetPoint("TOPLEFT", itemSlot, "TOPLEFT", 0, 0)
     OrctionItemTexture:Hide()
 
-    local slotHighlight = itemSlot:CreateTexture(nil, "OVERLAY")
-    slotHighlight:SetTexture("Interface\\Buttons\\ButtonHilight-Square")
-    slotHighlight:SetAllPoints()
-    slotHighlight:SetBlendMode("ADD")
-    itemSlot:SetHighlightTexture(slotHighlight)
 
     itemSlot:SetScript("OnClick", function()
         ClickAuctionSellItemButton()
@@ -130,44 +119,85 @@ local function Orction_BuildAHPanel()
         GameTooltip:Hide()
     end)
 
-    OrctionItemName = OrctionAHPanel:CreateFontString("OrctionItemName", "ARTWORK", "GameFontHighlightSmall")
-    OrctionItemName:SetPoint("TOPLEFT", itemSlot, "BOTTOMLEFT", 0, -GAP)
-    OrctionItemName:SetText("Drag an item here")
-
-    -- Starting Price
+    -- Starting Price  (Blizzard StartPrice: x=34 y=183)
     local startLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    startLabel:SetPoint("TOPLEFT", OrctionItemName, "BOTTOMLEFT", 0, -ROW_SEP)
+    startLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -148)
     startLabel:SetText("Starting Price")
 
     OrctionStartBid = CreateFrame("Frame", "OrctionStartBid", OrctionAHPanel, "MoneyInputFrameTemplate")
-    OrctionStartBid:SetPoint("TOPLEFT", startLabel, "BOTTOMLEFT", 0, -GAP)
+    OrctionStartBid:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -163)
     ResizeMoneyInputFrame("OrctionStartBid")
 
-    -- Buyout Price
+    -- Duration  (Blizzard: Short x=34 y=238, Medium y=254, Long y=270, all w=16 h=16)
+    local durationLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    durationLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -200)
+    durationLabel:SetText("Duration")
+
+    local OrctionShortBtn, OrctionMediumBtn, OrctionLongBtn
+
+    OrctionShortBtn = CreateFrame("CheckButton", "OrctionShortBtn", OrctionAHPanel, "UIRadioButtonTemplate")
+    OrctionShortBtn:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -215)
+    OrctionShortBtn:SetScript("OnClick", function()
+        ORCTION_DURATION = 720
+        OrctionMediumBtn:SetChecked(false)
+        OrctionLongBtn:SetChecked(false)
+        Orction_UpdateDeposit()
+    end)
+    local shortLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+    shortLabel:SetPoint("LEFT", OrctionShortBtn, "RIGHT", 4, 0)
+    shortLabel:SetText("12h")
+
+    OrctionMediumBtn = CreateFrame("CheckButton", "OrctionMediumBtn", OrctionAHPanel, "UIRadioButtonTemplate")
+    OrctionMediumBtn:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -230)
+    OrctionMediumBtn:SetScript("OnClick", function()
+        ORCTION_DURATION = 1440
+        OrctionShortBtn:SetChecked(false)
+        OrctionLongBtn:SetChecked(false)
+        Orction_UpdateDeposit()
+    end)
+    local mediumLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+    mediumLabel:SetPoint("LEFT", OrctionMediumBtn, "RIGHT", 4, 0)
+    mediumLabel:SetText("24h")
+
+    OrctionLongBtn = CreateFrame("CheckButton", "OrctionLongBtn", OrctionAHPanel, "UIRadioButtonTemplate")
+    OrctionLongBtn:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -245)
+    OrctionLongBtn:SetScript("OnClick", function()
+        ORCTION_DURATION = 2880
+        OrctionShortBtn:SetChecked(false)
+        OrctionMediumBtn:SetChecked(false)
+        Orction_UpdateDeposit()
+    end)
+    local longLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+    longLabel:SetPoint("LEFT", OrctionLongBtn, "RIGHT", 4, 0)
+    longLabel:SetText("48h")
+
+    OrctionMediumBtn:SetChecked(true)  -- default 24h
+
+    -- Buyout Price  (Blizzard BuyoutPrice: x=33 y=343)
     local buyoutLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    buyoutLabel:SetPoint("TOPLEFT", OrctionStartBid, "BOTTOMLEFT", 0, -ROW_SEP)
+    buyoutLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 33, -308)
     buyoutLabel:SetText("Buyout Price")
 
     OrctionBuyout = CreateFrame("Frame", "OrctionBuyout", OrctionAHPanel, "MoneyInputFrameTemplate")
-    OrctionBuyout:SetPoint("TOPLEFT", buyoutLabel, "BOTTOMLEFT", 0, -GAP)
+    OrctionBuyout:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 33, -323)
     ResizeMoneyInputFrame("OrctionBuyout")
 
-    -- Deposit
-    local depositLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    depositLabel:SetPoint("TOPLEFT", OrctionBuyout, "BOTTOMLEFT", 0, -ROW_SEP)
-    depositLabel:SetText("Deposit")
-
-    OrctionDepositValue = OrctionAHPanel:CreateFontString("OrctionDepositValue", "ARTWORK", "GameFontHighlightSmall")
-    OrctionDepositValue:SetPoint("TOPLEFT", depositLabel, "BOTTOMLEFT", 0, -GAP)
-    OrctionDepositValue:SetText("--")
-
-    -- Create Auction button
+    -- Create Auction button  (Blizzard AuctionsCreateAuctionButton: x=18 y=388 w=191 h=20)
     local createBtn = CreateFrame("Button", "OrctionCreateBtn", OrctionAHPanel, "UIPanelButtonTemplate")
-    createBtn:SetWidth(110)
-    createBtn:SetHeight(22)
-    createBtn:SetPoint("TOPLEFT", OrctionDepositValue, "BOTTOMLEFT", 0, -ROW_SEP)
+    createBtn:SetWidth(191)
+    createBtn:SetHeight(20)
+    createBtn:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 18, -388)
     createBtn:SetText("Create Auction")
     createBtn:SetScript("OnClick", Orction_CreateAuction)
+
+    -- Deposit  (Blizzard AuctionsDepositMoneyFrame: x=92 y=404)
+    local depositLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    depositLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 30, -362)
+    depositLabel:SetText("Deposit:")
+
+    OrctionDepositValue = OrctionAHPanel:CreateFontString("OrctionDepositValue", "ARTWORK", "GameFontHighlightSmall")
+    OrctionDepositValue:SetPoint("LEFT", depositLabel, "RIGHT", 6, 0)
+    OrctionDepositValue:SetText("--")
 
     -- ── Listen for item slot changes ──────────────────────────────────────
 
@@ -199,8 +229,31 @@ local function Orction_OnTabClick(index)
     end
 end
 
+local function Orction_DumpAuctionsChildren()
+    local af    = AuctionFrame
+    local afL   = af:GetLeft()
+    local afT   = af:GetTop()
+    DEFAULT_CHAT_FRAME:AddMessage("ORCTION DUMP: AuctionFrameAuctions children")
+    local children = {AuctionFrameAuctions:GetChildren()}
+    for i = 1, table.getn(children) do
+        local c = children[i]
+        local name = c:GetName() or ("(unnamed#"..i..")")
+        local l = c:GetLeft()
+        local t = c:GetTop()
+        local w = c:GetWidth()
+        local h = c:GetHeight()
+        local rx = l and afL and math.floor(l - afL) or "?"
+        local ry = t and afT and math.floor(afT - t) or "?"
+        DEFAULT_CHAT_FRAME:AddMessage(
+            name .. " | x=" .. rx .. " y=" .. ry ..
+            " w=" .. math.floor(w or 0) .. " h=" .. math.floor(h or 0)
+        )
+    end
+end
+
 local function Orction_SetupAH()
     Orction_BuildAHPanel()
+    Orction_DumpAuctionsChildren()
     AuctionFrameAuctions:Hide()
 
     local n = AuctionFrame.numTabs + 1
