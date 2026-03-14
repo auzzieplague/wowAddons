@@ -64,11 +64,6 @@ local function Orction_BuildAHPanel()
     OrctionAHPanel:SetHeight(AuctionFrame:GetHeight())
     OrctionAHPanel:SetFrameLevel(AuctionFrameAuctions:GetFrameLevel() + 20)
 
-    -- Opaque background covers any bleed-through from Blizzard frames below
-    local bg = OrctionAHPanel:CreateTexture(nil, "BACKGROUND")
-    bg:SetTexture("Interface\\DialogFrame\\UI-DialogBox-Background")
-    bg:SetAllPoints(OrctionAHPanel)
-
     OrctionAHPanel:Hide()
 
     -- ── Left panel: absolute positions cloned from AuctionFrameAuctions children ─
@@ -138,14 +133,17 @@ local function Orction_BuildAHPanel()
     OrctionShortBtn = CreateFrame("CheckButton", "OrctionShortBtn", OrctionAHPanel, "UIRadioButtonTemplate")
     OrctionShortBtn:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -215)
     OrctionShortBtn:SetScript("OnClick", function()
-        ORCTION_DURATION = 720
+        ORCTION_DURATION = 360
         OrctionMediumBtn:SetChecked(false)
         OrctionLongBtn:SetChecked(false)
+        AuctionsShortAuctionButton:SetChecked(true)
+        AuctionsMediumAuctionButton:SetChecked(false)
+        AuctionsLongAuctionButton:SetChecked(false)
         Orction_UpdateDeposit()
     end)
     local shortLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
     shortLabel:SetPoint("LEFT", OrctionShortBtn, "RIGHT", 4, 0)
-    shortLabel:SetText("12h")
+    shortLabel:SetText("6h")
 
     OrctionMediumBtn = CreateFrame("CheckButton", "OrctionMediumBtn", OrctionAHPanel, "UIRadioButtonTemplate")
     OrctionMediumBtn:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -230)
@@ -153,6 +151,9 @@ local function Orction_BuildAHPanel()
         ORCTION_DURATION = 1440
         OrctionShortBtn:SetChecked(false)
         OrctionLongBtn:SetChecked(false)
+        AuctionsShortAuctionButton:SetChecked(false)
+        AuctionsMediumAuctionButton:SetChecked(true)
+        AuctionsLongAuctionButton:SetChecked(false)
         Orction_UpdateDeposit()
     end)
     local mediumLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
@@ -162,16 +163,19 @@ local function Orction_BuildAHPanel()
     OrctionLongBtn = CreateFrame("CheckButton", "OrctionLongBtn", OrctionAHPanel, "UIRadioButtonTemplate")
     OrctionLongBtn:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -245)
     OrctionLongBtn:SetScript("OnClick", function()
-        ORCTION_DURATION = 2880
+        ORCTION_DURATION = 4320
         OrctionShortBtn:SetChecked(false)
         OrctionMediumBtn:SetChecked(false)
+        AuctionsShortAuctionButton:SetChecked(false)
+        AuctionsMediumAuctionButton:SetChecked(false)
+        AuctionsLongAuctionButton:SetChecked(true)
         Orction_UpdateDeposit()
     end)
     local longLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
     longLabel:SetPoint("LEFT", OrctionLongBtn, "RIGHT", 4, 0)
-    longLabel:SetText("48h")
+    longLabel:SetText("72h")
 
-    OrctionMediumBtn:SetChecked(true)  -- default 24h
+    OrctionMediumBtn:SetChecked(true)  -- default 24h; Blizzard's medium is also checked by default
 
     -- Buyout Price  (Blizzard BuyoutPrice: x=33 y=343)
     local buyoutLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
