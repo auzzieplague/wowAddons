@@ -3,6 +3,20 @@ local ORCTION_TAB_INDEX = nil
 local orig_AuctionFrameTab_OnClick = nil
 local ORCTION_DURATION = 1440  -- 24 hours in minutes
 
+-- ── Search state ───────────────────────────────────────────────────────────
+local ORCTION_MAX_PAGES      = 3
+local ORCTION_PAGE_SIZE      = 50
+local orctionSearchName      = nil
+local orctionSearchPage      = 0
+local orctionSearchActive    = false
+local orctionSearchResults   = {}
+local orctionResultRows      = {}
+local orctionBuyPending      = nil   -- { buyout = fullBuyoutCopper }
+local orctionPageProcessed   = false -- true after first non-zero AUCTION_ITEM_LIST_UPDATE for current page
+local orctionSearchRetry     = false -- true when waiting to query the next page
+local orctionQueryDelay      = 0     -- seconds accumulated since retry was flagged
+local orctionWaitTimeout     = 0     -- seconds waiting for non-zero batch on current page
+
 -- ── Helpers ───────────────────────────────────────────────────────────────
 
 local function ResizeMoneyInputFrame(frameName)
@@ -21,6 +35,114 @@ local function CopperToString(copper)
     return g .. "g " .. s .. "s " .. c .. "c"
 end
 
+-- ── Search logic ──────────────────────────────────────────────────────────
+
+local function Orction_DisplayResults()
+    local groups   = {}
+    local groupMap = {}
+    for _, item in ipairs(orctionSearchResults) do
+        local k = item.costPerItem
+        if not groupMap[k] then
+            groupMap[k] = { costPerItem = k, totalCount = 0, numAuctions = 0,
+                            firstBuyout = item.buyout, firstCount = item.count }
+            table.insert(groups, groupMap[k])
+        end
+        groupMap[k].totalCount  = groupMap[k].totalCount  + item.count
+        groupMap[k].numAuctions = groupMap[k].numAuctions + 1
+    end
+    table.sort(groups, function(a, b) return a.costPerItem < b.costPerItem end)
+
+    -- Reset scroll to top
+    local scroll = getglobal("OrctionResultScroll")
+    if scroll then scroll:SetVerticalScroll(0) end
+
+    for i = 1, table.getn(orctionResultRows) do
+        local row = orctionResultRows[i]
+        local g   = groups[i]
+        if g then
+            row.costPerItem = g.costPerItem
+            row.firstBuyout = g.firstBuyout
+            row.cost:SetText(CopperToString(g.costPerItem))
+            row.qty:SetText(tostring(g.totalCount))
+            row.auctions:SetText(tostring(g.numAuctions))
+            row.buyBtn:SetText("Buy " .. tostring(g.firstCount))
+            row.frame:Show()
+        else
+            row.costPerItem = nil
+            row.firstBuyout = nil
+            row.frame:Hide()
+        end
+    end
+end
+
+local function Orction_CollectPage()
+    if not orctionSearchActive then return end
+
+    local batch = GetNumAuctionItems("list")
+
+    if batch == 0 then
+        -- Blizzard fires a batch=0 event before large result sets are ready on ANY page.
+        -- Always wait; the OnUpdate timeout will give up if no data ever arrives.
+        return
+    end
+
+    if orctionPageProcessed then return end  -- ignore duplicate non-empty firings for this page
+    orctionPageProcessed = true
+    orctionWaitTimeout   = 0  -- got real data, reset the timeout
+    for i = 1, batch do
+        local name, texture, count, quality, canUse, level,
+              minBid, minIncrement, buyoutPrice = GetAuctionItemInfo("list", i)
+        if buyoutPrice and buyoutPrice > 0 and count and count > 0 then
+            table.insert(orctionSearchResults, {
+                buyout      = buyoutPrice,
+                count       = count,
+                costPerItem = math.floor(buyoutPrice / count),
+            })
+        end
+    end
+
+    local nextPage = orctionSearchPage + 1
+    if nextPage < ORCTION_MAX_PAGES and batch >= ORCTION_PAGE_SIZE then
+        orctionSearchPage  = nextPage
+        orctionSearchRetry = true   -- OnUpdate will fire the next query after a short delay
+        orctionQueryDelay  = 0
+    else
+        orctionSearchActive = false
+        Orction_DisplayResults()
+    end
+end
+
+local function Orction_StartSearch(name)
+    orctionSearchName    = name
+    orctionSearchPage    = 0
+    orctionSearchActive  = true
+    orctionPageProcessed = false
+    orctionSearchRetry   = false
+    orctionQueryDelay    = 0
+    orctionWaitTimeout   = 0
+    orctionSearchResults = {}
+    for i = 1, table.getn(orctionResultRows) do
+        orctionResultRows[i].frame:Hide()
+    end
+    QueryAuctionItems(name, nil, nil, nil, nil, nil, 0, nil, nil)
+end
+
+local function Orction_TryBuy()
+    if not orctionBuyPending then return end
+    local batch, total = GetNumAuctionItems("list")
+    for i = 1, batch do
+        local name, texture, count, quality, canUse, level,
+              minBid, minIncrement, buyoutPrice = GetAuctionItemInfo("list", i)
+        if buyoutPrice == orctionBuyPending.buyout then
+            PlaceAuctionBid("list", i, buyoutPrice)
+            orctionBuyPending = nil
+            return
+        end
+    end
+    orctionBuyPending = nil
+    DEFAULT_CHAT_FRAME:AddMessage("Orction: Auction not found - it may have sold.")
+end
+
 -- ── AH panel state ────────────────────────────────────────────────────────
 
 local function Orction_UpdateDeposit()
@@ -29,14 +151,22 @@ local function Orction_UpdateDeposit()
 end
 
 local function Orction_UpdateItemSlot()
-    local name, texture = GetAuctionSellItemInfo()
+    local name, texture, count = GetAuctionSellItemInfo()
     if name then
         OrctionItemTexture:SetTexture(texture)
         OrctionItemTexture:Show()
+        OrctionItemNameText:SetText(name)
+        OrctionItemCountBadge:SetText(count and count > 1 and tostring(count) or "")
         Orction_UpdateDeposit()
+        Orction_StartSearch(name)
     else
         OrctionItemTexture:Hide()
+        OrctionItemNameText:SetText("")
+        OrctionItemCountBadge:SetText("")
         OrctionDepositValue:SetText("--")
+        for i = 1, table.getn(orctionResultRows) do
+            orctionResultRows[i].frame:Hide()
+        end
     end
 end
 
@@ -113,6 +243,15 @@ local function Orction_BuildAHPanel()
     itemSlot:SetScript("OnLeave", function()
         GameTooltip:Hide()
     end)
+
+    OrctionItemNameText = OrctionAHPanel:CreateFontString("OrctionItemNameText", "ARTWORK", "GameFontHighlight")
+    OrctionItemNameText:SetPoint("TOPLEFT", itemSlot, "TOPRIGHT", 8, -4)
+    OrctionItemNameText:SetWidth(120)
+    OrctionItemNameText:SetText("")
+
+    OrctionItemCountBadge = OrctionAHPanel:CreateFontString("OrctionItemCountBadge", "OVERLAY", "NumberFontNormal")
+    OrctionItemCountBadge:SetPoint("BOTTOMRIGHT", itemSlot, "BOTTOMRIGHT", -2, 2)
+    OrctionItemCountBadge:SetText("")
 
     -- Starting Price  (Blizzard StartPrice: x=34 y=183)
     local startLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
@@ -203,12 +342,147 @@ local function Orction_BuildAHPanel()
     OrctionDepositValue:SetPoint("LEFT", depositLabel, "RIGHT", 6, 0)
     OrctionDepositValue:SetText("--")
 
-    -- ── Listen for item slot changes ──────────────────────────────────────
+    -- ── Results table (right panel, scrollable) ────────────────────────────
+    -- Right panel footprint from dump: x=219, y=76, w=576, h=37 per row
+    -- Column offsets are relative to the scroll child (x=0 = panel x=219)
+
+    local COL1_X   = 11    -- cost per item
+    local COL2_X   = 261   -- total available
+    local COL3_X   = 371   -- # auctions
+    local COL4_X   = 456   -- buy button x (left edge within row)
+    local HEADER_Y = -51
+    local ROW_H    = 37
+    local MAX_ROWS = 50
+    local ROW_W    = 543   -- 576 - 33 for scrollbar
+
+    local hCost = OrctionAHPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    hCost:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 219 + COL1_X, HEADER_Y)
+    hCost:SetText("Cost / Item")
+
+    local hQty = OrctionAHPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    hQty:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 219 + COL2_X, HEADER_Y)
+    hQty:SetText("Available")
+
+    local hAuc = OrctionAHPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    hAuc:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 219 + COL3_X, HEADER_Y)
+    hAuc:SetText("Auctions")
+
+    local scrollFrame = CreateFrame("ScrollFrame", "OrctionResultScroll", OrctionAHPanel,
+                                    "UIPanelScrollFrameTemplate")
+    scrollFrame:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 219, -76)
+    scrollFrame:SetWidth(ROW_W)
+    scrollFrame:SetHeight(316)   -- ~8.5 visible rows
+
+    local scrollChild = CreateFrame("Frame", "OrctionResultScrollChild", scrollFrame)
+    scrollChild:SetWidth(ROW_W)
+    scrollChild:SetHeight(MAX_ROWS * ROW_H)
+    scrollFrame:SetScrollChild(scrollChild)
+
+    for i = 1, MAX_ROWS do
+        local idx  = i
+        local yOff = -((i - 1) * ROW_H)
+
+        local rowBtn = CreateFrame("Button", nil, scrollChild)
+        rowBtn:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 0, yOff)
+        rowBtn:SetWidth(ROW_W)
+        rowBtn:SetHeight(ROW_H)
+
+        local bg = rowBtn:CreateTexture(nil, "BACKGROUND")
+        if math.mod(i, 2) == 0 then
+            bg:SetTexture(0.09, 0.09, 0.19, 0.5)
+        else
+            bg:SetTexture(0, 0, 0.09, 0.3)
+        end
+        bg:SetAllPoints()
+
+        local hl = rowBtn:CreateTexture(nil, "HIGHLIGHT")
+        hl:SetTexture(0.3, 0.3, 0.6, 0.4)
+        hl:SetAllPoints()
+
+        local costFS = rowBtn:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+        costFS:SetPoint("TOPLEFT", rowBtn, "TOPLEFT", COL1_X, -13)
+
+        local qtyFS = rowBtn:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+        qtyFS:SetPoint("TOPLEFT", rowBtn, "TOPLEFT", COL2_X, -13)
+
+        local aucFS = rowBtn:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+        aucFS:SetPoint("TOPLEFT", rowBtn, "TOPLEFT", COL3_X, -13)
+
+        local buyBtn = CreateFrame("Button", nil, rowBtn, "UIPanelButtonTemplate")
+        buyBtn:SetWidth(80)
+        buyBtn:SetHeight(22)
+        buyBtn:SetPoint("LEFT", rowBtn, "LEFT", COL4_X, 0)
+        buyBtn:SetText("Buy")
+        buyBtn:SetScript("OnClick", function()
+            local row = orctionResultRows[idx]
+            if row and row.firstBuyout and orctionSearchName then
+                orctionBuyPending = { buyout = row.firstBuyout }
+                QueryAuctionItems(orctionSearchName, nil, nil, nil, nil, nil, 0, nil, nil)
+            end
+        end)
+
+        -- Prevent row click when clicking the buy button
+        buyBtn:SetScript("OnMouseDown", function() this:GetParent():SetScript("OnClick", nil) end)
+        buyBtn:SetScript("OnMouseUp",   function()
+            this:GetParent():SetScript("OnClick", function()
+                local row = orctionResultRows[idx]
+                if row and row.costPerItem then
+                    MoneyInputFrame_SetCopper(OrctionStartBid, row.costPerItem)
+                    MoneyInputFrame_SetCopper(OrctionBuyout,   row.costPerItem)
+                end
+            end)
+        end)
+
+        rowBtn:SetScript("OnClick", function()
+            local row = orctionResultRows[idx]
+            if row and row.costPerItem then
+                MoneyInputFrame_SetCopper(OrctionStartBid, row.costPerItem)
+                MoneyInputFrame_SetCopper(OrctionBuyout,   row.costPerItem)
+            end
+        end)
+
+        orctionResultRows[i] = { frame = rowBtn, cost = costFS, qty = qtyFS,
+                                  auctions = aucFS, buyBtn = buyBtn,
+                                  costPerItem = nil, firstBuyout = nil }
+        rowBtn:Hide()
+    end
+
+    -- ── Listen for item slot and search result changes ─────────────────────
 
     OrctionAHPanel:RegisterEvent("NEW_AUCTION_UPDATE")
+    OrctionAHPanel:RegisterEvent("AUCTION_ITEM_LIST_UPDATE")
     OrctionAHPanel:SetScript("OnEvent", function()
         if event == "NEW_AUCTION_UPDATE" then
             Orction_UpdateItemSlot()
+        elseif event == "AUCTION_ITEM_LIST_UPDATE" then
+            if orctionBuyPending then
+                Orction_TryBuy()
+            else
+                Orction_CollectPage()
+            end
+        end
+    end)
+
+    -- Pace multi-page queries and time out if a page never returns data
+    OrctionAHPanel:SetScript("OnUpdate", function()
+        if orctionSearchRetry then
+            orctionQueryDelay = orctionQueryDelay + arg1
+            if orctionQueryDelay >= 0.3 then
+                orctionSearchRetry   = false
+                orctionPageProcessed = false
+                orctionWaitTimeout   = 0
+                orctionQueryDelay    = 0
+                QueryAuctionItems(orctionSearchName, nil, nil, nil, nil, nil,
+                                  orctionSearchPage, nil, nil)
+            end
+        elseif orctionSearchActive then
+            -- Waiting for AUCTION_ITEM_LIST_UPDATE with non-zero batch.
+            -- If nothing arrives in 3 seconds, display whatever we collected so far.
+            orctionWaitTimeout = orctionWaitTimeout + arg1
+            if orctionWaitTimeout >= 3.0 then
+                orctionSearchActive = false
+                Orction_DisplayResults()
+            end
         end
     end)
 end
@@ -257,7 +531,6 @@ end
 
 local function Orction_SetupAH()
     Orction_BuildAHPanel()
-    Orction_DumpAuctionsChildren()
     AuctionFrameAuctions:Hide()
 
     local n = AuctionFrame.numTabs + 1
