@@ -5,6 +5,15 @@ local ORCTION_DURATION = 1440  -- 24 hours in minutes
 
 -- ── Helpers ───────────────────────────────────────────────────────────────
 
+local function ResizeMoneyInputFrame(frameName)
+    local gold   = getglobal(frameName .. "Gold")
+    local silver = getglobal(frameName .. "Silver")
+    local copper = getglobal(frameName .. "Copper")
+    if gold   then gold:SetWidth(32)   end
+    if silver then silver:SetWidth(26) end
+    if copper then copper:SetWidth(26) end
+end
+
 local function CopperToString(copper)
     local g = math.floor(copper / 10000)
     local s = math.floor(math.mod(copper, 10000) / 100)
@@ -56,13 +65,19 @@ local function Orction_BuildAHPanel()
     OrctionAHPanel:SetWidth(AuctionFrame:GetWidth())
     OrctionAHPanel:SetHeight(AuctionFrame:GetHeight())
     OrctionAHPanel:SetFrameLevel(AuctionFrameAuctions:GetFrameLevel() + 20)
+
+    -- Opaque background covers any bleed-through from Blizzard frames below
+    local bg = OrctionAHPanel:CreateTexture(nil, "BACKGROUND")
+    bg:SetTexture("Interface\\DialogFrame\\UI-DialogBox-Background")
+    bg:SetAllPoints(OrctionAHPanel)
+
     OrctionAHPanel:Hide()
 
     -- ── Left panel: all elements within x = 0-150 ────────────────────────
     -- Anchored from TOPLEFT, stacked vertically
 
-    local X       = 14   -- left margin
-    local Y       = -65  -- top of content (below AH title bar)
+    local X       = 29   -- left margin
+    local Y       = -115 -- top of content (below AH title bar)
     local LABEL_H = 16   -- font string height
     local GAP     = 8    -- gap between label and its input
     local ROW_SEP = 10   -- gap between rows
@@ -84,7 +99,9 @@ local function Orction_BuildAHPanel()
     slotBg:SetAllPoints()
 
     OrctionItemTexture = itemSlot:CreateTexture("OrctionItemTexture", "ARTWORK")
-    OrctionItemTexture:SetAllPoints()
+    OrctionItemTexture:SetWidth(64)
+    OrctionItemTexture:SetHeight(64)
+    OrctionItemTexture:SetPoint("TOPLEFT", itemSlot, "TOPLEFT", 0, 0)
     OrctionItemTexture:Hide()
 
     local slotHighlight = itemSlot:CreateTexture(nil, "OVERLAY")
@@ -124,6 +141,7 @@ local function Orction_BuildAHPanel()
 
     OrctionStartBid = CreateFrame("Frame", "OrctionStartBid", OrctionAHPanel, "MoneyInputFrameTemplate")
     OrctionStartBid:SetPoint("TOPLEFT", startLabel, "BOTTOMLEFT", 0, -GAP)
+    ResizeMoneyInputFrame("OrctionStartBid")
 
     -- Buyout Price
     local buyoutLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
@@ -132,6 +150,7 @@ local function Orction_BuildAHPanel()
 
     OrctionBuyout = CreateFrame("Frame", "OrctionBuyout", OrctionAHPanel, "MoneyInputFrameTemplate")
     OrctionBuyout:SetPoint("TOPLEFT", buyoutLabel, "BOTTOMLEFT", 0, -GAP)
+    ResizeMoneyInputFrame("OrctionBuyout")
 
     -- Deposit
     local depositLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
@@ -144,7 +163,7 @@ local function Orction_BuildAHPanel()
 
     -- Create Auction button
     local createBtn = CreateFrame("Button", "OrctionCreateBtn", OrctionAHPanel, "UIPanelButtonTemplate")
-    createBtn:SetWidth(130)
+    createBtn:SetWidth(110)
     createBtn:SetHeight(22)
     createBtn:SetPoint("TOPLEFT", OrctionDepositValue, "BOTTOMLEFT", 0, -ROW_SEP)
     createBtn:SetText("Create Auction")
@@ -160,6 +179,7 @@ local function Orction_BuildAHPanel()
     end)
 end
 
+
 -- ── Tab click hook ────────────────────────────────────────────────────────
 
 local function Orction_OnTabClick(index)
@@ -168,16 +188,9 @@ local function Orction_OnTabClick(index)
     end
 
     if index == ORCTION_TAB_INDEX then
-        -- Manually hide all default panels without calling orig, which fires
-        -- async callbacks that re-show AuctionFrameAuctions after our hide calls
-        AuctionFrameBrowse:Hide()
-        AuctionFrameBid:Hide()
-        AuctionFrameAuctions:Hide()
-        -- Seed the page field StartAuction depends on if not already set
-        if AuctionFrameAuctions.page == nil then
-            AuctionFrameAuctions.page = 0
-        end
+        orig_AuctionFrameTab_OnClick(3)
         PanelTemplates_SetTab(AuctionFrame, ORCTION_TAB_INDEX)
+        AuctionFrameAuctions:Hide()
         OrctionAHPanel:Show()
         Orction_UpdateItemSlot()
     else
@@ -188,6 +201,7 @@ end
 
 local function Orction_SetupAH()
     Orction_BuildAHPanel()
+    AuctionFrameAuctions:Hide()
 
     local n = AuctionFrame.numTabs + 1
     ORCTION_TAB_INDEX = n
@@ -317,6 +331,9 @@ eventFrame:SetScript("OnEvent", function()
             Orction_HookChat()
         elseif string.lower(arg1) == "blizzard_auctionui" then
             Orction_SetupAH()
+            eventFrame:RegisterEvent("AUCTION_HOUSE_SHOW")
         end
+    elseif event == "AUCTION_HOUSE_SHOW" then
+        AuctionFrameAuctions:Hide()
     end
 end)
