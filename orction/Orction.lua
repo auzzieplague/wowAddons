@@ -16,6 +16,7 @@ local orctionPageProcessed   = false -- true after first non-zero AUCTION_ITEM_L
 local orctionSearchRetry     = false -- true when waiting to query the next page
 local orctionQueryDelay      = 0     -- seconds accumulated since retry was flagged
 local orctionWaitTimeout     = 0     -- seconds waiting for non-zero batch on current page
+local orctionPendingPost     = nil   -- { name, startBid, buyout, count, stacksLeft, totalStacks }
 
 -- ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -51,6 +52,13 @@ local function Orction_DisplayResults()
         groupMap[k].numAuctions = groupMap[k].numAuctions + 1
     end
     table.sort(groups, function(a, b) return a.costPerItem < b.costPerItem end)
+
+    if OrctionSearchingText then OrctionSearchingText:Hide() end
+
+    local hasResults = table.getn(groups) > 0
+    if OrctionNoResultsText then
+        if hasResults then OrctionNoResultsText:Hide() else OrctionNoResultsText:Show() end
+    end
 
     -- Reset scroll to top
     local scroll = getglobal("OrctionResultScroll")
@@ -124,6 +132,8 @@ local function Orction_StartSearch(name)
     for i = 1, table.getn(orctionResultRows) do
         orctionResultRows[i].frame:Hide()
     end
+    if OrctionSearchingText then OrctionSearchingText:Show() end
+    if OrctionNoResultsText  then OrctionNoResultsText:Hide()  end
     QueryAuctionItems(name, nil, nil, nil, nil, nil, 0, nil, nil)
 end
 
@@ -144,45 +154,202 @@ local function Orction_TryBuy()
 end
 
 -- ── AH panel state ────────────────────────────────────────────────────────
+-- Deposit and item slot display are driven by Orction_OnItemDrop / Orction_ClearItemSlot
+-- (defined after the inventory helpers so they can use Orction_FindBagSlot).
 
-local function Orction_UpdateDeposit()
-    local deposit = CalculateAuctionDeposit(ORCTION_DURATION) or 0
-    OrctionDepositValue:SetText(CopperToString(deposit))
+-- ── Inventory helpers ─────────────────────────────────────────────────────
+
+local function Orction_GetInventoryCount(itemName)
+    local total = 0
+    for bag = 0, 4 do
+        for slot = 1, GetContainerNumSlots(bag) do
+            local link = GetContainerItemLink(bag, slot)
+            if link then
+                local name = string.gsub(link, ".*%[(.-)%].*", "%1")
+                if name == itemName then
+                    local _, count = GetContainerItemInfo(bag, slot)
+                    total = total + (count or 1)
+                end
+            end
+        end
+    end
+    return total
 end
 
-local function Orction_UpdateItemSlot()
-    local name, texture, count = GetAuctionSellItemInfo()
-    if name then
-        OrctionItemTexture:SetTexture(texture)
-        OrctionItemTexture:Show()
-        OrctionItemNameText:SetText(name)
-        OrctionItemCountBadge:SetText(count and count > 1 and tostring(count) or "")
-        Orction_UpdateDeposit()
-        Orction_StartSearch(name)
-    else
-        OrctionItemTexture:Hide()
-        OrctionItemNameText:SetText("")
-        OrctionItemCountBadge:SetText("")
-        OrctionDepositValue:SetText("--")
-        for i = 1, table.getn(orctionResultRows) do
-            orctionResultRows[i].frame:Hide()
+local function Orction_GetMaxStacks(itemName, stackSize)
+    if not stackSize or stackSize <= 0 then return 0 end
+    return math.floor(Orction_GetInventoryCount(itemName) / stackSize)
+end
+
+-- First bag slot holding >= needed items of itemName
+local function Orction_FindBagSlot(itemName, needed)
+    for bag = 0, 4 do
+        for slot = 1, GetContainerNumSlots(bag) do
+            local link = GetContainerItemLink(bag, slot)
+            if link then
+                local name = string.gsub(link, ".*%[(.-)%].*", "%1")
+                if name == itemName then
+                    local _, count = GetContainerItemInfo(bag, slot)
+                    if (count or 0) >= needed then
+                        return bag, slot, (count or 0)
+                    end
+                end
+            end
         end
+    end
+    return nil
+end
+
+-- Called when user drops an item onto the slot.
+-- ClearCursor is reliable when cursor item came from a bag (returns to source bag slot).
+-- We scan empty slots before + after to identify which slot the item returned to,
+-- then read name/texture/count from that bag slot.
+-- The sell slot is NEVER touched here — only during the actual StartAuction call.
+-- Called when the user drops an item onto the slot.
+-- ClickAuctionSellItemButton is the only reliable way to read cursor item info in 1.12.
+-- The item stays in the sell slot; it is only cleared when the user clicks to remove it
+-- or StartAuction consumes it.
+local function Orction_OnItemDrop()
+    ClickAuctionSellItemButton()  -- cursor → sell slot
+    local name, texture, count = GetAuctionSellItemInfo()
+    if not name then return end
+    OrctionItemTexture:SetTexture(texture)
+    OrctionItemTexture:Show()
+    OrctionItemNameText:SetText(name)
+    OrctionItemCountBadge:SetText(count > 1 and tostring(count) or "")
+    if OrctionCountBox then OrctionCountBox:SetText(tostring(count)) end
+    if OrctionDepositValue then OrctionDepositValue:SetText("--") end
+    Orction_StartSearch(name)
+end
+
+local function Orction_ClearItemSlot()
+    -- Return sell slot item to cursor, then back to bag via ClearCursor.
+    -- (ClickAuctionSellItemButton pick-up + ClearCursor is the only path available in 1.12.)
+    if GetAuctionSellItemInfo() then
+        ClickAuctionSellItemButton()
+        ClearCursor()
+    end
+    OrctionItemTexture:Hide()
+    OrctionItemNameText:SetText("")
+    OrctionItemCountBadge:SetText("")
+    if OrctionDepositValue then OrctionDepositValue:SetText("--") end
+    orctionSearchName = nil
+    orctionPendingPost = nil
+    if OrctionCreateBtn then OrctionCreateBtn:SetText("Create Auction") end
+    for i = 1, table.getn(orctionResultRows) do
+        orctionResultRows[i].frame:Hide()
+    end
+    if OrctionSearchingText then OrctionSearchingText:Hide() end
+    if OrctionNoResultsText  then OrctionNoResultsText:Hide() end
+end
+
+-- First call: item is already in the sell slot (user dragged it there).
+-- Subsequent calls (stacks > 1): sell slot is empty after StartAuction, so pull from bags.
+local function Orction_PrepareAndPost(name, count, startBid, buyout)
+    local _, _, sellCount = GetAuctionSellItemInfo()
+    DEFAULT_CHAT_FRAME:AddMessage("Orction [PrepareAndPost]: name=" .. tostring(name) .. " count=" .. tostring(count) .. " sellCount=" .. tostring(sellCount))
+
+    if sellCount then
+        -- Sell slot occupied = first stack (user's drag). Post it directly.
+        -- Stack size is whatever the user dragged; Count field is used for subsequent stacks.
+        DEFAULT_CHAT_FRAME:AddMessage("Orction [PrepareAndPost]: posting from sell slot (count=" .. sellCount .. ")")
+        StartAuction(startBid, buyout, ORCTION_DURATION)
+        return true
+    end
+
+    -- Sell slot empty = subsequent stack. Pull exactly `count` from bags.
+    local bag, slot, bagCount = Orction_FindBagSlot(name, count)
+    DEFAULT_CHAT_FRAME:AddMessage("Orction [PrepareAndPost]: FindBagSlot -> bag=" .. tostring(bag) .. " slot=" .. tostring(slot) .. " bagCount=" .. tostring(bagCount))
+    if not bag then
+        DEFAULT_CHAT_FRAME:AddMessage("Orction: No " .. name .. " (x" .. count .. ") in bags.")
+        return false
+    end
+
+    if bagCount > count then
+        SplitContainerItem(bag, slot, count)
+    else
+        PickupContainerItem(bag, slot)
+    end
+    DEFAULT_CHAT_FRAME:AddMessage("Orction [PrepareAndPost]: after split cursorHasItem=" .. tostring(CursorHasItem()))
+
+    ClickAuctionSellItemButton()
+    local _, _, finalCount = GetAuctionSellItemInfo()
+    DEFAULT_CHAT_FRAME:AddMessage("Orction [PrepareAndPost]: sell slot=" .. tostring(finalCount))
+
+    if not finalCount then
+        DEFAULT_CHAT_FRAME:AddMessage("Orction: failed to place item in sell slot, aborting")
+        if CursorHasItem() then ClearCursor() end
+        return false
+    end
+
+    StartAuction(startBid, buyout, ORCTION_DURATION)
+    DEFAULT_CHAT_FRAME:AddMessage("Orction [PrepareAndPost]: StartAuction done")
+    return true
+end
+
+local function Orction_PostNextStack()
+    if not orctionPendingPost then return end
+    local p = orctionPendingPost
+
+    if not Orction_PrepareAndPost(p.name, p.count, p.startBid, p.buyout) then
+        orctionPendingPost = nil
+        OrctionCreateBtn:SetText("Create Auction")
+        return
+    end
+
+    p.stacksLeft = p.stacksLeft - 1
+    if p.stacksLeft <= 0 then
+        orctionPendingPost = nil
+        OrctionCreateBtn:SetText("Create Auction")
+    else
+        local posted = p.totalStacks - p.stacksLeft
+        OrctionCreateBtn:SetText("Post Stack " .. (posted + 1) .. "/" .. p.totalStacks)
     end
 end
 
 local function Orction_CreateAuction()
-    local name = GetAuctionSellItemInfo()
-    if not name then
-        DEFAULT_CHAT_FRAME:AddMessage("Orction: Place an item in the auction slot first.")
+    DEFAULT_CHAT_FRAME:AddMessage("Orction [CreateAuction]: called, pendingPost=" .. tostring(orctionPendingPost ~= nil))
+    if orctionPendingPost then
+        Orction_PostNextStack()
         return
     end
+
+    local name = orctionSearchName
+    if not name then
+        DEFAULT_CHAT_FRAME:AddMessage("Orction: Drop an item in the slot first.")
+        return
+    end
+
+    local count  = math.max(1, tonumber(OrctionCountBox:GetText())  or 1)
+    local stacks = math.max(1, tonumber(OrctionStacksBox:GetText()) or 1)
     local startBid = MoneyInputFrame_GetCopper(OrctionStartBid)
     local buyout   = MoneyInputFrame_GetCopper(OrctionBuyout)
+    DEFAULT_CHAT_FRAME:AddMessage("Orction [CreateAuction]: name=" .. name ..
+        " count=" .. count .. " stacks=" .. stacks ..
+        " startBid=" .. startBid .. " buyout=" .. buyout)
+
     if buyout > 0 and startBid > buyout then
         DEFAULT_CHAT_FRAME:AddMessage("Orction: Starting price cannot exceed buyout price.")
         return
     end
-    StartAuction(startBid, buyout, ORCTION_DURATION)
+
+    local have = Orction_GetInventoryCount(name)
+    local need = count * stacks
+    DEFAULT_CHAT_FRAME:AddMessage("Orction [CreateAuction]: have=" .. have .. " need=" .. need)
+    if have < need then
+        DEFAULT_CHAT_FRAME:AddMessage("Orction: Need " .. need .. " " .. name .. ", only " .. have .. " in bags.")
+        return
+    end
+
+    if not Orction_PrepareAndPost(name, count, startBid, buyout) then
+        return
+    end
+
+    if stacks > 1 then
+        orctionPendingPost = { name = name, startBid = startBid, buyout = buyout,
+                               count = count, stacksLeft = stacks - 1, totalStacks = stacks }
+        OrctionCreateBtn:SetText("Post Stack 2/" .. stacks)
+    end
 end
 
 -- ── Build the AH panel ────────────────────────────────────────────────────
@@ -200,8 +367,7 @@ local function Orction_BuildAHPanel()
     -- All SetPoint anchors are relative to OrctionAHPanel TOPLEFT (= AuctionFrame TOPLEFT).
     -- x/y values match the dump output so elements land on the same background areas.
 
-    -- Item slot  (Blizzard AuctionsItemButton: x=27 y=98 w=37 h=37)
-    -- We use 52x52; shift left by 8px so the slot is centred over the same spot.
+    -- Item slot (60x60, anchored at x=27 y=-95)
     local itemLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
     itemLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 27, -78)
     itemLabel:SetText("Auction Item")
@@ -224,20 +390,22 @@ local function Orction_BuildAHPanel()
     OrctionItemTexture:Hide()
 
 
+    itemSlot:SetScript("OnReceiveDrag", Orction_OnItemDrop)
     itemSlot:SetScript("OnClick", function()
-        ClickAuctionSellItemButton()
-        ClearCursor()
-    end)
-    itemSlot:SetScript("OnReceiveDrag", function()
-        ClickAuctionSellItemButton()
-        ClearCursor()
+        if CursorHasItem() then
+            Orction_OnItemDrop()
+        else
+            Orction_ClearItemSlot()
+        end
     end)
     itemSlot:SetScript("OnEnter", function()
-        local name = GetAuctionSellItemInfo()
-        if name then
-            GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
-            GameTooltip:SetAuctionSellItem()
-            GameTooltip:Show()
+        if orctionSearchName then
+            local b, s = Orction_FindBagSlot(orctionSearchName, 1)
+            if b then
+                GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+                GameTooltip:SetBagItem(b, s)
+                GameTooltip:Show()
+            end
         end
     end)
     itemSlot:SetScript("OnLeave", function()
@@ -250,7 +418,7 @@ local function Orction_BuildAHPanel()
     OrctionItemNameText:SetText("")
 
     OrctionItemCountBadge = OrctionAHPanel:CreateFontString("OrctionItemCountBadge", "OVERLAY", "NumberFontNormal")
-    OrctionItemCountBadge:SetPoint("BOTTOMRIGHT", itemSlot, "BOTTOMRIGHT", -2, 2)
+    OrctionItemCountBadge:SetPoint("BOTTOMRIGHT", itemSlot, "BOTTOMRIGHT", -2, 4)
     OrctionItemCountBadge:SetText("")
 
     -- Starting Price  (Blizzard StartPrice: x=34 y=183)
@@ -262,85 +430,71 @@ local function Orction_BuildAHPanel()
     OrctionStartBid:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -163)
     ResizeMoneyInputFrame("OrctionStartBid")
 
-    -- Duration  (Blizzard: Short x=34 y=238, Medium y=254, Long y=270, all w=16 h=16)
-    local durationLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    durationLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -200)
-    durationLabel:SetText("Duration")
+    -- Duration is fixed at 24h — sync Blizzard's button so CalculateAuctionDeposit is accurate
+    AuctionsMediumAuctionButton:SetChecked(true)
 
-    local OrctionShortBtn, OrctionMediumBtn, OrctionLongBtn
+    -- Count  ──────────────────────────────────────────────────────────────────
+    local countLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    countLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -195)
+    countLabel:SetText("Count")
 
-    OrctionShortBtn = CreateFrame("CheckButton", "OrctionShortBtn", OrctionAHPanel, "UIRadioButtonTemplate")
-    OrctionShortBtn:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -215)
-    OrctionShortBtn:SetScript("OnClick", function()
-        ORCTION_DURATION = 360
-        OrctionMediumBtn:SetChecked(false)
-        OrctionLongBtn:SetChecked(false)
-        AuctionsShortAuctionButton:SetChecked(true)
-        AuctionsMediumAuctionButton:SetChecked(false)
-        AuctionsLongAuctionButton:SetChecked(false)
-        Orction_UpdateDeposit()
+    OrctionCountBox = CreateFrame("EditBox", "OrctionCountBox", OrctionAHPanel, "InputBoxTemplate")
+    OrctionCountBox:SetWidth(40)
+    OrctionCountBox:SetHeight(18)
+    OrctionCountBox:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -210)
+    OrctionCountBox:SetMaxLetters(4)
+    OrctionCountBox:SetAutoFocus(false)
+    OrctionCountBox:SetText("1")
+
+    -- Stacks  ─────────────────────────────────────────────────────────────────
+    local stacksLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    stacksLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -233)
+    stacksLabel:SetText("Stacks")
+
+    OrctionStacksBox = CreateFrame("EditBox", "OrctionStacksBox", OrctionAHPanel, "InputBoxTemplate")
+    OrctionStacksBox:SetWidth(40)
+    OrctionStacksBox:SetHeight(18)
+    OrctionStacksBox:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -248)
+    OrctionStacksBox:SetMaxLetters(3)
+    OrctionStacksBox:SetAutoFocus(false)
+    OrctionStacksBox:SetText("1")
+
+    local maxStacksBtn = CreateFrame("Button", nil, OrctionAHPanel, "UIPanelButtonTemplate")
+    maxStacksBtn:SetWidth(40)
+    maxStacksBtn:SetHeight(18)
+    maxStacksBtn:SetPoint("LEFT", OrctionStacksBox, "RIGHT", 4, 0)
+    maxStacksBtn:SetText("Max")
+    maxStacksBtn:SetScript("OnClick", function()
+        if not orctionSearchName then return end
+        local count = math.max(1, tonumber(OrctionCountBox:GetText()) or 1)
+        OrctionStacksBox:SetText(tostring(Orction_GetMaxStacks(orctionSearchName, count)))
     end)
-    local shortLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
-    shortLabel:SetPoint("LEFT", OrctionShortBtn, "RIGHT", 4, 0)
-    shortLabel:SetText("6h")
 
-    OrctionMediumBtn = CreateFrame("CheckButton", "OrctionMediumBtn", OrctionAHPanel, "UIRadioButtonTemplate")
-    OrctionMediumBtn:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -230)
-    OrctionMediumBtn:SetScript("OnClick", function()
-        ORCTION_DURATION = 1440
-        OrctionShortBtn:SetChecked(false)
-        OrctionLongBtn:SetChecked(false)
-        AuctionsShortAuctionButton:SetChecked(false)
-        AuctionsMediumAuctionButton:SetChecked(true)
-        AuctionsLongAuctionButton:SetChecked(false)
-        Orction_UpdateDeposit()
-    end)
-    local mediumLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
-    mediumLabel:SetPoint("LEFT", OrctionMediumBtn, "RIGHT", 4, 0)
-    mediumLabel:SetText("24h")
-
-    OrctionLongBtn = CreateFrame("CheckButton", "OrctionLongBtn", OrctionAHPanel, "UIRadioButtonTemplate")
-    OrctionLongBtn:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -245)
-    OrctionLongBtn:SetScript("OnClick", function()
-        ORCTION_DURATION = 4320
-        OrctionShortBtn:SetChecked(false)
-        OrctionMediumBtn:SetChecked(false)
-        AuctionsShortAuctionButton:SetChecked(false)
-        AuctionsMediumAuctionButton:SetChecked(false)
-        AuctionsLongAuctionButton:SetChecked(true)
-        Orction_UpdateDeposit()
-    end)
-    local longLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
-    longLabel:SetPoint("LEFT", OrctionLongBtn, "RIGHT", 4, 0)
-    longLabel:SetText("72h")
-
-    OrctionMediumBtn:SetChecked(true)  -- default 24h; Blizzard's medium is also checked by default
-
-    -- Buyout Price  (Blizzard BuyoutPrice: x=33 y=343)
+    -- Buyout Price  ────────────────────────────────────────────────────────────
     local buyoutLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    buyoutLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 33, -308)
+    buyoutLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 33, -275)
     buyoutLabel:SetText("Buyout Price")
 
     OrctionBuyout = CreateFrame("Frame", "OrctionBuyout", OrctionAHPanel, "MoneyInputFrameTemplate")
-    OrctionBuyout:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 33, -323)
+    OrctionBuyout:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 33, -290)
     ResizeMoneyInputFrame("OrctionBuyout")
 
-    -- Create Auction button  (Blizzard AuctionsCreateAuctionButton: x=18 y=388 w=191 h=20)
-    local createBtn = CreateFrame("Button", "OrctionCreateBtn", OrctionAHPanel, "UIPanelButtonTemplate")
-    createBtn:SetWidth(191)
-    createBtn:SetHeight(20)
-    createBtn:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 18, -388)
-    createBtn:SetText("Create Auction")
-    createBtn:SetScript("OnClick", Orction_CreateAuction)
-
-    -- Deposit  (Blizzard AuctionsDepositMoneyFrame: x=92 y=404)
+    -- Deposit  ────────────────────────────────────────────────────────────────
     local depositLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    depositLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 30, -362)
+    depositLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 30, -323)
     depositLabel:SetText("Deposit:")
 
     OrctionDepositValue = OrctionAHPanel:CreateFontString("OrctionDepositValue", "ARTWORK", "GameFontHighlightSmall")
     OrctionDepositValue:SetPoint("LEFT", depositLabel, "RIGHT", 6, 0)
     OrctionDepositValue:SetText("--")
+
+    -- Create Auction button  ───────────────────────────────────────────────────
+    OrctionCreateBtn = CreateFrame("Button", "OrctionCreateBtn", OrctionAHPanel, "UIPanelButtonTemplate")
+    OrctionCreateBtn:SetWidth(191)
+    OrctionCreateBtn:SetHeight(20)
+    OrctionCreateBtn:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 18, -348)
+    OrctionCreateBtn:SetText("Create Auction")
+    OrctionCreateBtn:SetScript("OnClick", Orction_CreateAuction)
 
     -- ── Results table (right panel, scrollable) ────────────────────────────
     -- Right panel footprint from dump: x=219, y=76, w=576, h=37 per row
@@ -447,14 +601,22 @@ local function Orction_BuildAHPanel()
         rowBtn:Hide()
     end
 
+    -- Status labels shown in place of the results table
+    OrctionSearchingText = scrollChild:CreateFontString("OrctionSearchingText", "OVERLAY", "GameFontHighlight")
+    OrctionSearchingText:SetPoint("TOP", scrollChild, "TOP", 0, -60)
+    OrctionSearchingText:SetText("Searching...")
+    OrctionSearchingText:Hide()
+
+    OrctionNoResultsText = scrollChild:CreateFontString("OrctionNoResultsText", "OVERLAY", "GameFontHighlight")
+    OrctionNoResultsText:SetPoint("TOP", scrollChild, "TOP", 0, -60)
+    OrctionNoResultsText:SetText("No items available for buyout.")
+    OrctionNoResultsText:Hide()
+
     -- ── Listen for item slot and search result changes ─────────────────────
 
-    OrctionAHPanel:RegisterEvent("NEW_AUCTION_UPDATE")
     OrctionAHPanel:RegisterEvent("AUCTION_ITEM_LIST_UPDATE")
     OrctionAHPanel:SetScript("OnEvent", function()
-        if event == "NEW_AUCTION_UPDATE" then
-            Orction_UpdateItemSlot()
-        elseif event == "AUCTION_ITEM_LIST_UPDATE" then
+        if event == "AUCTION_ITEM_LIST_UPDATE" then
             if orctionBuyPending then
                 Orction_TryBuy()
             else
@@ -500,7 +662,6 @@ local function Orction_OnTabClick(index)
         PanelTemplates_SetTab(AuctionFrame, ORCTION_TAB_INDEX)
         AuctionFrameAuctions:Hide()
         OrctionAHPanel:Show()
-        Orction_UpdateItemSlot()
     else
         OrctionAHPanel:Hide()
         orig_AuctionFrameTab_OnClick(index)
