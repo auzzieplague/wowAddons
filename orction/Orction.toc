@@ -3,5 +3,7 @@
 ## Notes: Auction house addon
 ## Author: auzzi
 ## Version: 0.1.0
+## SavedVariables: OrctionDB
 
 Orction.lua
+OrctionPostbox.lua

@@ -17,6 +17,7 @@ local orctionSearchRetry     = false -- true when waiting to query the next page
 local orctionQueryDelay      = 0     -- seconds accumulated since retry was flagged
 local orctionWaitTimeout     = 0     -- seconds waiting for non-zero batch on current page
 local orctionPendingPost     = nil   -- { name, startBid, buyout, count, stacksLeft, totalStacks }
+local orctionPendingDrop     = nil   -- { name, texture, count } while confirm dialog is open
 
 -- ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -181,17 +182,22 @@ local function Orction_GetMaxStacks(itemName, stackSize)
     return math.floor(Orction_GetInventoryCount(itemName) / stackSize)
 end
 
--- First bag slot holding >= needed items of itemName
-local function Orction_FindBagSlot(itemName, needed)
+-- First bag slot holding >= needed items of itemName.
+-- excludeSlots: optional set keyed by (bag*1000+slot) of slots to skip
+-- (used to avoid stale data on slots we just emptied this session).
+local function Orction_FindBagSlot(itemName, needed, excludeSlots)
     for bag = 0, 4 do
         for slot = 1, GetContainerNumSlots(bag) do
-            local link = GetContainerItemLink(bag, slot)
-            if link then
-                local name = string.gsub(link, ".*%[(.-)%].*", "%1")
-                if name == itemName then
-                    local _, count = GetContainerItemInfo(bag, slot)
-                    if (count or 0) >= needed then
-                        return bag, slot, (count or 0)
+            local k = bag * 1000 + slot
+            if not (excludeSlots and excludeSlots[k]) then
+                local link = GetContainerItemLink(bag, slot)
+                if link then
+                    local name = string.gsub(link, ".*%[(.-)%].*", "%1")
+                    if name == itemName then
+                        local _, count = GetContainerItemInfo(bag, slot)
+                        if (count or 0) >= needed then
+                            return bag, slot, (count or 0)
+                        end
                     end
                 end
             end
@@ -205,26 +211,37 @@ end
 -- We scan empty slots before + after to identify which slot the item returned to,
 -- then read name/texture/count from that bag slot.
 -- The sell slot is NEVER touched here — only during the actual StartAuction call.
--- Called when the user drops an item onto the slot.
--- ClickAuctionSellItemButton is the only reliable way to read cursor item info in 1.12.
--- The item stays in the sell slot; it is only cleared when the user clicks to remove it
--- or StartAuction consumes it.
-local function Orction_OnItemDrop()
-    ClickAuctionSellItemButton()  -- cursor → sell slot
-    local name, texture, count = GetAuctionSellItemInfo()
-    if not name then return end
+-- Finalises a confirmed drop: updates display, saves stack count preference, starts search.
+local function Orction_CompleteItemDrop(name, texture, count)
     OrctionItemTexture:SetTexture(texture)
     OrctionItemTexture:Show()
     OrctionItemNameText:SetText(name)
     OrctionItemCountBadge:SetText(count > 1 and tostring(count) or "")
     if OrctionCountBox then OrctionCountBox:SetText(tostring(count)) end
     if OrctionDepositValue then OrctionDepositValue:SetText("--") end
+    if OrctionDB then OrctionDB.stackCounts[name] = count end
     Orction_StartSearch(name)
 end
 
+-- Called when the user drops an item onto the slot.
+local function Orction_OnItemDrop()
+    ClickAuctionSellItemButton()  -- cursor → sell slot
+    local name, texture, count = GetAuctionSellItemInfo()
+    if not name then return end
+
+    local lastCount = OrctionDB and OrctionDB.stackCounts and OrctionDB.stackCounts[name]
+    if lastCount and lastCount ~= count then
+        -- Count differs from last used — ask before committing
+        orctionPendingDrop = { name = name, texture = texture, count = count }
+        StaticPopup_Show("ORCTION_STACK_CONFIRM", name, count)
+    else
+        Orction_CompleteItemDrop(name, texture, count)
+    end
+end
+
 local function Orction_ClearItemSlot()
-    -- Return sell slot item to cursor, then back to bag via ClearCursor.
-    -- (ClickAuctionSellItemButton pick-up + ClearCursor is the only path available in 1.12.)
+    StaticPopup_Hide("ORCTION_STACK_CONFIRM")
+    orctionPendingDrop = nil
     if GetAuctionSellItemInfo() then
         ClickAuctionSellItemButton()
         ClearCursor()
@@ -243,114 +260,248 @@ local function Orction_ClearItemSlot()
     if OrctionNoResultsText  then OrctionNoResultsText:Hide() end
 end
 
--- First call: item is already in the sell slot (user dragged it there).
--- Subsequent calls (stacks > 1): sell slot is empty after StartAuction, so pull from bags.
-local function Orction_PrepareAndPost(name, count, startBid, buyout)
-    local _, _, sellCount = GetAuctionSellItemInfo()
-    DEFAULT_CHAT_FRAME:AddMessage("Orction [PrepareAndPost]: name=" .. tostring(name) .. " count=" .. tostring(count) .. " sellCount=" .. tostring(sellCount))
-
-    if sellCount then
-        -- Sell slot occupied = first stack (user's drag). Post it directly.
-        -- Stack size is whatever the user dragged; Count field is used for subsequent stacks.
-        DEFAULT_CHAT_FRAME:AddMessage("Orction [PrepareAndPost]: posting from sell slot (count=" .. sellCount .. ")")
-        StartAuction(startBid, buyout, ORCTION_DURATION)
-        return true
+-- Returns the first empty bag slot (bag, slot), or nil if bags are full.
+local function Orction_FindEmptyBagSlot()
+    for bag = 0, 4 do
+        for slot = 1, GetContainerNumSlots(bag) do
+            if not GetContainerItemLink(bag, slot) then
+                return bag, slot
+            end
+        end
     end
-
-    -- Sell slot empty = subsequent stack. Pull exactly `count` from bags.
-    local bag, slot, bagCount = Orction_FindBagSlot(name, count)
-    DEFAULT_CHAT_FRAME:AddMessage("Orction [PrepareAndPost]: FindBagSlot -> bag=" .. tostring(bag) .. " slot=" .. tostring(slot) .. " bagCount=" .. tostring(bagCount))
-    if not bag then
-        DEFAULT_CHAT_FRAME:AddMessage("Orction: No " .. name .. " (x" .. count .. ") in bags.")
-        return false
-    end
-
-    if bagCount > count then
-        SplitContainerItem(bag, slot, count)
-    else
-        PickupContainerItem(bag, slot)
-    end
-    DEFAULT_CHAT_FRAME:AddMessage("Orction [PrepareAndPost]: after split cursorHasItem=" .. tostring(CursorHasItem()))
-
-    ClickAuctionSellItemButton()
-    local _, _, finalCount = GetAuctionSellItemInfo()
-    DEFAULT_CHAT_FRAME:AddMessage("Orction [PrepareAndPost]: sell slot=" .. tostring(finalCount))
-
-    if not finalCount then
-        DEFAULT_CHAT_FRAME:AddMessage("Orction: failed to place item in sell slot, aborting")
-        if CursorHasItem() then ClearCursor() end
-        return false
-    end
-
-    StartAuction(startBid, buyout, ORCTION_DURATION)
-    DEFAULT_CHAT_FRAME:AddMessage("Orction [PrepareAndPost]: StartAuction done")
-    return true
+    return nil
 end
 
-local function Orction_PostNextStack()
-    if not orctionPendingPost then return end
-    local p = orctionPendingPost
+-- ── Posting logic ─────────────────────────────────────────────────────────
+--
+-- TurtleWoW hard limits discovered through testing:
+--   1. SplitContainerItem picks up the ENTIRE source stack (or ClickAuctionSellItemButton
+--      reads the SOURCE bag slot, not the cursor count).  Either way, calling
+--      ClickAuctionSellItemButton immediately after SplitContainerItem posts the
+--      full source stack, not the split count.
+--   2. The fix: split → stage in a fresh empty bag slot (PickupContainerItem to
+--      place — this DOES work for empty slots).  That fresh slot now contains
+--      exactly `count` items and has no "source" pointing back to a larger stack.
+--      On the NEXT hardware-event click, PickupContainerItem that staged slot →
+--      ClickAuctionSellItemButton → StartAuction.
+--   3. One bag operation per hardware event; SplitContainerItem + PickupContainerItem
+--      (place) is exactly two bag ops and works.  PickupContainerItem (pickup) alone
+--      is one bag op and works.
+--
+-- Per-stack flow (two button clicks):
+--   Click "Stage k/N"  → SplitContainerItem(src,count) + PickupContainerItem(temp)
+--                         Button becomes "Post k/N"
+--   Click "Post k/N"   → SellSlotClear check + PickupContainerItem(temp)
+--                         + ClickAuctionSellItemButton + StartAuction
+--                         Button becomes "Stage (k+1)/N" or "Create Auction"
+--
+-- pendingPost fields:
+--   name, startBid, buyout, count, totalStacks, stacksLeft
+--   staged = false|true   (whether temp slot is ready to post)
+--   tempBag, tempSlot     (location of staged items, valid when staged=true)
 
-    if not Orction_PrepareAndPost(p.name, p.count, p.startBid, p.buyout) then
-        orctionPendingPost = nil
-        OrctionCreateBtn:SetText("Create Auction")
-        return
-    end
-
-    p.stacksLeft = p.stacksLeft - 1
-    if p.stacksLeft <= 0 then
-        orctionPendingPost = nil
-        OrctionCreateBtn:SetText("Create Auction")
-    else
-        local posted = p.totalStacks - p.stacksLeft
-        OrctionCreateBtn:SetText("Post Stack " .. (posted + 1) .. "/" .. p.totalStacks)
-    end
+local function Orction_SellSlotClear()
+    if CursorHasItem() then ClearCursor() end
+    ClickAuctionSellItemButton()
+    if not CursorHasItem() then return true end
+    ClearCursor()
+    return false
 end
 
 local function Orction_CreateAuction()
-    DEFAULT_CHAT_FRAME:AddMessage("Orction [CreateAuction]: called, pendingPost=" .. tostring(orctionPendingPost ~= nil))
+    DEFAULT_CHAT_FRAME:AddMessage("Orction [CA]: pendingPost=" .. tostring(orctionPendingPost ~= nil))
+
+    -- ── Pending post: stage or post depending on phase ─────────────────────
     if orctionPendingPost then
-        Orction_PostNextStack()
+        local p = orctionPendingPost
+
+        if p.staged then
+            -- ── Phase 2: sell slot clear check + pick up staged slot + post ──
+            if not Orction_SellSlotClear() then
+                DEFAULT_CHAT_FRAME:AddMessage("Orction: Previous auction processing — click again.")
+                return   -- keep pendingPost, user retries
+            end
+
+            local _, tc = GetContainerItemInfo(p.tempBag, p.tempSlot)
+            DEFAULT_CHAT_FRAME:AddMessage("Orction [Post]: staged slot " .. p.tempBag .. "/" .. p.tempSlot .. " count=" .. tostring(tc))
+
+            p.excludeSlots[p.tempBag * 1000 + p.tempSlot] = true
+            PickupContainerItem(p.tempBag, p.tempSlot)
+            DEFAULT_CHAT_FRAME:AddMessage("Orction [Post]: cursor=" .. tostring(CursorHasItem()))
+            if not CursorHasItem() then
+                DEFAULT_CHAT_FRAME:AddMessage("Orction: Staged slot empty — aborting.")
+                orctionPendingPost = nil
+                OrctionCreateBtn:SetText("Create Auction")
+                return
+            end
+
+            ClickAuctionSellItemButton()
+            local _, _, fc = GetAuctionSellItemInfo()
+            DEFAULT_CHAT_FRAME:AddMessage("Orction [Post]: sell slot=" .. tostring(fc))
+            if not fc then
+                DEFAULT_CHAT_FRAME:AddMessage("Orction: Item not in sell slot.")
+                if CursorHasItem() then ClearCursor() end
+                orctionPendingPost = nil
+                OrctionCreateBtn:SetText("Create Auction")
+                return
+            end
+
+            StartAuction(p.startBid, p.buyout, ORCTION_DURATION)
+            DEFAULT_CHAT_FRAME:AddMessage("Orction [Post]: StartAuction done count=" .. fc)
+
+            p.stacksLeft = p.stacksLeft - 1
+            p.staged     = false
+            p.tempBag    = nil
+            p.tempSlot   = nil
+
+            if p.stacksLeft <= 0 then
+                orctionPendingPost = nil
+                OrctionCreateBtn:SetText("Create Auction")
+            else
+                local next = p.totalStacks - p.stacksLeft + 1
+                OrctionCreateBtn:SetText("Stage " .. next .. "/" .. p.totalStacks)
+            end
+
+        else
+            -- ── Phase 1: split count items → stage in empty bag slot ─────────
+            local bag, slot, bagCount = Orction_FindBagSlot(p.name, p.count, p.excludeSlots)
+            DEFAULT_CHAT_FRAME:AddMessage("Orction [Stage]: FindBagSlot bag=" .. tostring(bag) .. " slot=" .. tostring(slot) .. " bagCount=" .. tostring(bagCount))
+            if not bag then
+                DEFAULT_CHAT_FRAME:AddMessage("Orction: No source items — aborting.")
+                orctionPendingPost = nil
+                OrctionCreateBtn:SetText("Create Auction")
+                return
+            end
+
+            local eb, es = Orction_FindEmptyBagSlot()
+            if not eb then
+                DEFAULT_CHAT_FRAME:AddMessage("Orction: No empty bag slot for staging — aborting.")
+                orctionPendingPost = nil
+                OrctionCreateBtn:SetText("Create Auction")
+                return
+            end
+
+            if bagCount > p.count then
+                DEFAULT_CHAT_FRAME:AddMessage("Orction [Stage]: Split(" .. bag .. "," .. slot .. "," .. p.count .. ")")
+                SplitContainerItem(bag, slot, p.count)
+            else
+                DEFAULT_CHAT_FRAME:AddMessage("Orction [Stage]: Pickup(" .. bag .. "," .. slot .. ")")
+                PickupContainerItem(bag, slot)
+                -- Whole slot picked up — mark as emptied so stale data won't resurface it
+                p.excludeSlots[bag * 1000 + slot] = true
+            end
+
+            DEFAULT_CHAT_FRAME:AddMessage("Orction [Stage]: cursor=" .. tostring(CursorHasItem()))
+            if not CursorHasItem() then
+                DEFAULT_CHAT_FRAME:AddMessage("Orction: Failed to pick up items — aborting.")
+                orctionPendingPost = nil
+                OrctionCreateBtn:SetText("Create Auction")
+                return
+            end
+
+            PickupContainerItem(eb, es)
+            DEFAULT_CHAT_FRAME:AddMessage("Orction [Stage]: placed " .. eb .. "/" .. es .. " cursor=" .. tostring(CursorHasItem()))
+            if CursorHasItem() then
+                DEFAULT_CHAT_FRAME:AddMessage("Orction: Failed to place in staging slot — aborting.")
+                ClearCursor()
+                orctionPendingPost = nil
+                OrctionCreateBtn:SetText("Create Auction")
+                return
+            end
+
+            local _, sc = GetContainerItemInfo(eb, es)
+            DEFAULT_CHAT_FRAME:AddMessage("Orction [Stage]: staged slot count=" .. tostring(sc))
+
+            p.staged   = true
+            p.tempBag  = eb
+            p.tempSlot = es
+            local cur = p.totalStacks - p.stacksLeft + 1
+            OrctionCreateBtn:SetText("Post " .. cur .. "/" .. p.totalStacks)
+        end
         return
     end
 
+    -- ── First click: validate + park sell slot (1 bag op) ─────────────────
     local name = orctionSearchName
     if not name then
         DEFAULT_CHAT_FRAME:AddMessage("Orction: Drop an item in the slot first.")
         return
     end
 
-    local count  = math.max(1, tonumber(OrctionCountBox:GetText())  or 1)
-    local stacks = math.max(1, tonumber(OrctionStacksBox:GetText()) or 1)
+    local count    = math.max(1, tonumber(OrctionCountBox:GetText())  or 1)
+    local stacks   = math.max(1, tonumber(OrctionStacksBox:GetText()) or 1)
     local startBid = MoneyInputFrame_GetCopper(OrctionStartBid)
     local buyout   = MoneyInputFrame_GetCopper(OrctionBuyout)
-    DEFAULT_CHAT_FRAME:AddMessage("Orction [CreateAuction]: name=" .. name ..
-        " count=" .. count .. " stacks=" .. stacks ..
-        " startBid=" .. startBid .. " buyout=" .. buyout)
+    DEFAULT_CHAT_FRAME:AddMessage("Orction [CA]: " .. name .. " x" .. count .. " stacks=" .. stacks)
 
     if buyout > 0 and startBid > buyout then
-        DEFAULT_CHAT_FRAME:AddMessage("Orction: Starting price cannot exceed buyout price.")
+        DEFAULT_CHAT_FRAME:AddMessage("Orction: Starting price cannot exceed buyout.")
         return
     end
 
     local have = Orction_GetInventoryCount(name)
+    local sn, _, sc = GetAuctionSellItemInfo()
+    if sn == name then have = have + (sc or 0) end
     local need = count * stacks
-    DEFAULT_CHAT_FRAME:AddMessage("Orction [CreateAuction]: have=" .. have .. " need=" .. need)
+    DEFAULT_CHAT_FRAME:AddMessage("Orction [CA]: have=" .. have .. " need=" .. need)
     if have < need then
-        DEFAULT_CHAT_FRAME:AddMessage("Orction: Need " .. need .. " " .. name .. ", only " .. have .. " in bags.")
+        DEFAULT_CHAT_FRAME:AddMessage("Orction: Need " .. need .. " " .. name .. ", have " .. have .. ".")
         return
     end
 
-    if not Orction_PrepareAndPost(name, count, startBid, buyout) then
-        return
+    -- Park the dragged sell slot item into bags so it can be split correctly.
+    if CursorHasItem() then ClearCursor() end
+    ClickAuctionSellItemButton()
+    if CursorHasItem() then
+        local eb, es = Orction_FindEmptyBagSlot()
+        if not eb then
+            DEFAULT_CHAT_FRAME:AddMessage("Orction: Bags full — cannot park item.")
+            ClearCursor()
+            return
+        end
+        PickupContainerItem(eb, es)
+        DEFAULT_CHAT_FRAME:AddMessage("Orction [CA]: parked at " .. eb .. "/" .. es .. " cursor=" .. tostring(CursorHasItem()))
+        if CursorHasItem() then
+            DEFAULT_CHAT_FRAME:AddMessage("Orction: Could not park sell slot item.")
+            ClearCursor()
+            return
+        end
     end
 
-    if stacks > 1 then
-        orctionPendingPost = { name = name, startBid = startBid, buyout = buyout,
-                               count = count, stacksLeft = stacks - 1, totalStacks = stacks }
-        OrctionCreateBtn:SetText("Post Stack 2/" .. stacks)
-    end
+    orctionPendingPost = {
+        name = name, startBid = startBid, buyout = buyout, count = count,
+        totalStacks = stacks, stacksLeft = stacks,
+        staged = false, tempBag = nil, tempSlot = nil,
+        excludeSlots = {},
+    }
+    OrctionCreateBtn:SetText("Stage 1/" .. stacks)
 end
+
+-- ── Stack size confirmation dialog ────────────────────────────────────────
+
+StaticPopupDialogs["ORCTION_STACK_CONFIRM"] = {
+    text         = "Sell %s in stacks of %d?",
+    button1      = "Yes",
+    button2      = "No",
+    timeout      = 0,
+    whileDead    = false,
+    hideOnEscape = true,
+    OnAccept = function()
+        if orctionPendingDrop then
+            local p = orctionPendingDrop
+            orctionPendingDrop = nil
+            Orction_CompleteItemDrop(p.name, p.texture, p.count)
+        end
+    end,
+    OnCancel = function()
+        orctionPendingDrop = nil
+        -- Return sell slot item to cursor so user can place it in bags and split
+        if GetAuctionSellItemInfo() then
+            ClickAuctionSellItemButton()
+        end
+        DEFAULT_CHAT_FRAME:AddMessage("Orction: Stack returned. Shift+click your bag stack to split, then re-drag.")
+    end,
+}
 
 -- ── Build the AH panel ────────────────────────────────────────────────────
 
@@ -818,6 +969,8 @@ eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:SetScript("OnEvent", function()
     if event == "ADDON_LOADED" then
         if arg1 == ADDON_NAME then
+            OrctionDB = OrctionDB or {}
+            OrctionDB.stackCounts = OrctionDB.stackCounts or {}
             DEFAULT_CHAT_FRAME:AddMessage(ADDON_NAME .. " initialised")
             Orction_HookChat()
         elseif string.lower(arg1) == "blizzard_auctionui" then
