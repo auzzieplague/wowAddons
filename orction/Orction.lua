@@ -195,8 +195,7 @@ local function Orction_DisplayResults()
     if hasResults and OrctionCountBox then
         local count = math.max(1, tonumber(OrctionCountBox:GetText()) or 1)
         local price = groups[1].costPerItem * count
-        MoneyInputFrame_SetCopper(OrctionStartBid, price)
-        MoneyInputFrame_SetCopper(OrctionBuyout,   price)
+        MoneyInputFrame_SetCopper(OrctionBuyout, price)
     end
 
     -- Reset scroll to top
@@ -398,7 +397,6 @@ local function Orction_CompleteItemDrop(name, texture, count)
     OrctionItemTexture:SetTexture(texture)
     OrctionItemTexture:Show()
     OrctionItemNameText:SetText(name)
-    OrctionItemCountBadge:SetText(count > 1 and tostring(count) or "")
     if OrctionCountBox then OrctionCountBox:SetText(tostring(count)) end
     if OrctionStacksBox then
         OrctionStacksBox:SetText(tostring(Orction_GetMaxStacks(name, count)))
@@ -435,7 +433,6 @@ local function Orction_ClearItemSlot()
     end
     OrctionItemTexture:Hide()
     OrctionItemNameText:SetText("")
-    OrctionItemCountBadge:SetText("")
     if OrctionDepositValue then OrctionDepositValue:SetText("--") end
     orctionSearchName  = nil
     orctionSellName    = nil
@@ -620,14 +617,9 @@ local function Orction_CreateAuction()
 
     local count    = math.max(1, tonumber(OrctionCountBox:GetText())  or 1)
     local stacks   = math.max(1, tonumber(OrctionStacksBox:GetText()) or 1)
-    local startBid = MoneyInputFrame_GetCopper(OrctionStartBid)
     local buyout   = MoneyInputFrame_GetCopper(OrctionBuyout)
+    local startBid = buyout
     DEFAULT_CHAT_FRAME:AddMessage("Orction [CA]: " .. name .. " x" .. count .. " stacks=" .. stacks)
-
-    if buyout > 0 and startBid > buyout then
-        DEFAULT_CHAT_FRAME:AddMessage("Orction: Starting price cannot exceed buyout.")
-        return
-    end
 
     local have = Orction_GetInventoryCount(name)
     local sn, _, sc = GetAuctionSellItemInfo()
@@ -714,9 +706,9 @@ local function Orction_BuildAHPanel()
 
     -- ── Search bar (top, full width) ──────────────────────────────────────────
     OrctionSearchBox = CreateFrame("EditBox", "OrctionSearchBox", OrctionAHPanel, "InputBoxTemplate")
-    OrctionSearchBox:SetWidth(540)
+    OrctionSearchBox:SetWidth(600)
     OrctionSearchBox:SetHeight(20)
-    OrctionSearchBox:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 10, -22)
+    OrctionSearchBox:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 60, -72)
     OrctionSearchBox:SetAutoFocus(false)
     OrctionSearchBox:SetMaxLetters(64)
     OrctionSearchBox:SetScript("OnEnterPressed", function()
@@ -739,27 +731,28 @@ local function Orction_BuildAHPanel()
     -- x/y values match the dump output so elements land on the same background areas.
 
     -- Item slot (60x60, anchored at x=27 y=-95)
-    local itemLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
-    itemLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 27, -78)
-    itemLabel:SetText("Auction Item")
+    --local itemLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+    --itemLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 27, -78)
+    --itemLabel:SetText("Auction Item")
 
+    -- drag drop area
     local itemSlot = CreateFrame("Button", "OrctionItemSlot", OrctionAHPanel)
-    itemSlot:SetWidth(60)
-    itemSlot:SetHeight(60)
-    itemSlot:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 27, -95)
+    itemSlot:SetWidth(65)
+    itemSlot:SetHeight(65)
+    itemSlot:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 27, -96)
     itemSlot:RegisterForDrag("LeftButton")
     itemSlot:EnableMouse(true)
 
-    local slotBg = itemSlot:CreateTexture(nil, "BACKGROUND")
-    slotBg:SetTexture("Interface\\Buttons\\UI-Slot-Background")
-    slotBg:SetAllPoints()
-
+    -- drag dropped item texture
     OrctionItemTexture = itemSlot:CreateTexture("OrctionItemTexture", "ARTWORK")
     OrctionItemTexture:SetWidth(38)
     OrctionItemTexture:SetHeight(38)
     OrctionItemTexture:SetPoint("TOPLEFT", itemSlot, "TOPLEFT", 0, 0)
     OrctionItemTexture:Hide()
 
+    --local slotBg = itemSlot:CreateTexture(nil, "BACKGROUND")
+    --slotBg:SetTexture("Interface\\Buttons\\UI-Slot-Background")
+    --slotBg:SetAllPoints()
 
     itemSlot:SetScript("OnReceiveDrag", Orction_OnItemDrop)
     itemSlot:SetScript("OnClick", function()
@@ -784,31 +777,18 @@ local function Orction_BuildAHPanel()
     end)
 
     OrctionItemNameText = OrctionAHPanel:CreateFontString("OrctionItemNameText", "ARTWORK", "GameFontHighlight")
-    OrctionItemNameText:SetPoint("TOPLEFT", itemSlot, "TOPRIGHT", 8, -4)
+    OrctionItemNameText:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 68, -105)
     OrctionItemNameText:SetWidth(120)
-    OrctionItemNameText:SetText("")
-
-    OrctionItemCountBadge = OrctionAHPanel:CreateFontString("OrctionItemCountBadge", "OVERLAY", "NumberFontNormal")
-    OrctionItemCountBadge:SetPoint("BOTTOMRIGHT", itemSlot, "BOTTOMRIGHT", -2, 4)
-    OrctionItemCountBadge:SetText("")
+    OrctionItemNameText:SetText("< Drag an item here to post an Auction")
 
     -- Vendor Sell (below item slot)
     local vendorSellLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
-    vendorSellLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 27, -168)
+    vendorSellLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 27, -148)
     vendorSellLabel:SetText("Vendor Sell:")
 
     OrctionVendorSellValue = OrctionAHPanel:CreateFontString("OrctionVendorSellValue", "ARTWORK", "GameFontHighlightSmall")
     OrctionVendorSellValue:SetPoint("LEFT", vendorSellLabel, "RIGHT", 4, 0)
     OrctionVendorSellValue:SetText("--")
-
-    -- Starting Price
-    local startLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    startLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -178)
-    startLabel:SetText("Starting Price")
-
-    OrctionStartBid = CreateFrame("Frame", "OrctionStartBid", OrctionAHPanel, "MoneyInputFrameTemplate")
-    OrctionStartBid:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -193)
-    ResizeMoneyInputFrame("OrctionStartBid")
 
     -- Duration is fixed at 24h — sync Blizzard's button so CalculateAuctionDeposit is accurate
     AuctionsMediumAuctionButton:SetChecked(true)
@@ -887,7 +867,7 @@ local function Orction_BuildAHPanel()
     local HEADER_Y = -51
     local ROW_H    = 37
     local MAX_ROWS = 50
-    local ROW_W    = 543   -- 576 - 33 for scrollbar
+    local ROW_W    = 578   -- 543 + 50
 
     local hCost = OrctionAHPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     hCost:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 219 + COL1_X, HEADER_Y)
@@ -963,8 +943,7 @@ local function Orction_BuildAHPanel()
                 if row and row.costPerItem then
                     local count = math.max(1, tonumber(OrctionCountBox:GetText()) or 1)
                     local price = row.costPerItem * count
-                    MoneyInputFrame_SetCopper(OrctionStartBid, price)
-                    MoneyInputFrame_SetCopper(OrctionBuyout,   price)
+                    MoneyInputFrame_SetCopper(OrctionBuyout, price)
                 end
             end)
         end)
