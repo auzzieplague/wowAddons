@@ -21,6 +21,7 @@ local orctionPendingDrop     = nil   -- { name, texture, count } while confirm d
 local orctionVendorPrice     = nil   -- vendor sell price (copper) for the current search item
 local orctionSellName        = nil   -- name of the item currently in the sell slot (for Create Auction)
 local orctionPendingSellRead = false -- true when waiting for sell slot info after a swap
+local orctionSellPollElapsed = 0     -- seconds spent polling for sell slot info
 local ORCTION_TOOLTIP_HOOKED = false
 local orctionLastTooltipLink = nil
 local orctionLastTooltipName = nil
@@ -492,6 +493,7 @@ local function Orction_OnItemDrop()
     local name, texture, count = GetAuctionSellItemInfo()
     if not name then
         orctionPendingSellRead = true
+        orctionSellPollElapsed = 0
         return
     end
     Orction_HandleSellSlotItem(name, texture, count)
@@ -501,6 +503,7 @@ local function Orction_ClearItemSlot(keepCursor)
     StaticPopup_Hide("ORCTION_STACK_CONFIRM")
     orctionPendingDrop = nil
     orctionPendingSellRead = false
+    orctionSellPollElapsed = 0
     if GetAuctionSellItemInfo() then
         ClickAuctionSellItemButton()
         if not keepCursor then
@@ -1265,8 +1268,8 @@ local function Orction_BuildAHPanel()
     OrctionNoResultsText:SetText("No items available for buyout.")
     OrctionNoResultsText:Hide()
 
-    OrctionSimilarResultsText = scrollChild:CreateFontString("OrctionSimilarResultsText", "OVERLAY", "GameFontHighlight")
-    OrctionSimilarResultsText:SetPoint("TOP", scrollChild, "TOP", 0, 10)
+    OrctionSimilarResultsText = OrctionAHPanel:CreateFontString("OrctionSimilarResultsText", "OVERLAY", "GameFontHighlight")
+    OrctionSimilarResultsText:SetPoint("BOTTOM", scrollFrame, "TOP", 0, 24)
     OrctionSimilarResultsText:SetText("|cFFFF9900No Exact Matches! Showing similar...|r")
     OrctionSimilarResultsText:Hide()
 
@@ -1294,6 +1297,18 @@ local function Orction_BuildAHPanel()
 
     -- Pace multi-page queries and time out if a page never returns data
     OrctionAHPanel:SetScript("OnUpdate", function()
+        if orctionPendingSellRead then
+            orctionSellPollElapsed = orctionSellPollElapsed + arg1
+            local name, texture, count = GetAuctionSellItemInfo()
+            if name then
+                orctionPendingSellRead = false
+                orctionSellPollElapsed = 0
+                Orction_HandleSellSlotItem(name, texture, count)
+            elseif orctionSellPollElapsed >= 1.0 then
+                orctionPendingSellRead = false
+                orctionSellPollElapsed = 0
+            end
+        end
         if orctionSearchRetry then
             orctionQueryDelay = orctionQueryDelay + arg1
             if orctionQueryDelay >= 0.3 then
