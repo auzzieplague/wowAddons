@@ -962,21 +962,42 @@ local function Orction_BuildAHPanel()
     OrctionCreateBtn:SetText("Create Auction")
     OrctionCreateBtn:SetScript("OnClick", Orction_CreateAuction)
 
-    -- ── Watchlist panel ───────────────────────────────────────────────────────
+    local watchlistToggleBtn = CreateFrame("Button", nil, OrctionAHPanel, "UIPanelButtonTemplate")
+    watchlistToggleBtn:SetWidth(120)
+    watchlistToggleBtn:SetHeight(23)
+    watchlistToggleBtn:SetPoint("TOPLEFT", OrctionCreateBtn, "BOTTOMLEFT", 40, -78)
+    watchlistToggleBtn:SetText("Watchlist")
+    watchlistToggleBtn:SetScript("OnClick", function()
+        local wl = getglobal("OrctionWatchlistFrame")
+        if wl then
+            if wl:IsShown() then wl:Hide() else wl:Show() ; Orction_RefreshWatchlist() end
+        end
+    end)
+
+    -- ── Watchlist overlay panel ───────────────────────────────────────────────
     local wlFrame = CreateFrame("Frame", "OrctionWatchlistFrame", OrctionAHPanel)
     wlFrame:SetWidth(195)
     wlFrame:SetHeight(280)
-    wlFrame:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 14, -286)
+    wlFrame:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 15, -75)
+    wlFrame:SetFrameLevel(OrctionAHPanel:GetFrameLevel() + 15)
     wlFrame:SetBackdrop({
         bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile     = true, tileSize = 16, edgeSize = 12,
+        tile     = true, tileSize = 32, edgeSize = 12,
         insets   = { left = 3, right = 3, top = 3, bottom = 3 },
     })
+    wlFrame:SetBackdropColor(1, 1, 1, 1)
+    wlFrame:Hide()
 
     local wlTitle = wlFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     wlTitle:SetPoint("TOPLEFT", wlFrame, "TOPLEFT", 8, -6)
     wlTitle:SetText("Watchlist")
+
+    local wlCloseBtn = CreateFrame("Button", nil, wlFrame, "UIPanelCloseButton")
+    wlCloseBtn:SetWidth(20)
+    wlCloseBtn:SetHeight(20)
+    wlCloseBtn:SetPoint("TOPRIGHT", wlFrame, "TOPRIGHT", 2, 2)
+    wlCloseBtn:SetScript("OnClick", function() wlFrame:Hide() end)
 
     -- FauxScrollFrame provides only the scrollbar widget — rows must NOT be its children
     -- (ScrollFrame clips its children; rows go in a plain sibling frame instead)
@@ -1229,7 +1250,9 @@ local function Orction_OnTabClick(index)
         PanelTemplates_SetTab(AuctionFrame, ORCTION_TAB_INDEX)
         AuctionFrameAuctions:Hide()
         OrctionAHPanel:Show()
-        Orction_RefreshWatchlist()
+        if OrctionWatchlistFrame and OrctionWatchlistFrame:IsShown() then
+            Orction_RefreshWatchlist()
+        end
     else
         OrctionAHPanel:Hide()
         orig_AuctionFrameTab_OnClick(index)
