@@ -330,8 +330,9 @@ settingsEventFrame:SetScript("OnEvent", function()
         -- Sync global used by Orction.lua search logic
         ORCTION_MAX_PAGES = s.maxPages
 
-        -- Ensure watchlist table exists
-        if not OrctionDB.watchlist then OrctionDB.watchlist = {} end
+        -- Ensure persistent tables exist
+        if not OrctionDB.vendorPrices then OrctionDB.vendorPrices = {} end
+        if not OrctionDB.watchlist     then OrctionDB.watchlist     = {} end
     end
 end)
 

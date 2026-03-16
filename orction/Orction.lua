@@ -30,6 +30,7 @@ local WL_ROW_H               = 16
 local WL_MAX_ROWS            = 13
 local orctionSimilarResults  = {}   -- all AH results regardless of name match
 local orctionShowingSimilar  = false -- true when showing similar after exact match found nothing
+local orctionVendorCache     = {}   -- name -> vendor copper, reset each search
 
 -- ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -209,6 +210,7 @@ local function Orction_DisplayResults()
             groupMap[k] = { name        = item.name,
                             texture     = item.texture,
                             costPerItem = item.costPerItem,
+                            vendorPrice = item.vendorPrice or 0,
                             totalCount  = 0, numAuctions = 0,
                             firstBuyout = item.buyout,
                             firstCount  = item.count }
@@ -263,7 +265,7 @@ local function Orction_DisplayResults()
                 if g.texture then row.iconTex:SetTexture(g.texture) ; row.iconTex:Show()
                 else               row.iconTex:Hide() end
             end
-            if orctionVendorPrice and orctionVendorPrice > 0 and g.costPerItem < orctionVendorPrice then
+            if g.vendorPrice and g.vendorPrice > 0 and g.costPerItem < g.vendorPrice then
                 row.bg:SetTexture(0, 0.35, 0, 0.55)
                 row.buyBtn:SetText("Snatch " .. tostring(g.firstCount))
             else
@@ -300,21 +302,33 @@ local function Orction_CollectPage()
         local name, texture, count, quality, canUse, level,
               minBid, minIncrement, buyoutPrice = GetAuctionItemInfo("list", i)
 
-        -- Resolve vendor price from first exact match
-        if name == orctionSearchName and (not orctionVendorPrice or orctionVendorPrice == 0) and SellValues then
-            local link = GetAuctionItemLink("list", i)
-            if link then
-                local _, _, itemID = string.find(link, "item:(%d+)")
-                if itemID then
-                    local price = SellValues["item:" .. itemID]
-                    if price and price > 0 then
-                        orctionVendorPrice = price
-                        if OrctionDB and OrctionDB.vendorPrices then
-                            OrctionDB.vendorPrices[name] = price
-                        end
+        -- Per-item vendor price: session cache → AH link → bag scan fallback
+        local vPrice = orctionVendorCache[name]
+        if vPrice == nil then
+            -- Try AH link → SellValues first (fast, works during AUCTION_ITEM_LIST_UPDATE)
+            if SellValues then
+                local link = GetAuctionItemLink("list", i)
+                if link then
+                    local _, _, itemID = string.find(link, "item:(%d+)")
+                    if itemID then
+                        vPrice = SellValues["item:" .. itemID] or 0
                     end
                 end
             end
+            vPrice = vPrice or 0
+            -- Fallback: persistent cache or bag scan (handles non-exact queries where link may be nil)
+            if vPrice == 0 then
+                vPrice = OrctionVendor_GetPrice(name)
+            end
+            -- Persist to DB so future searches (and non-exact mode) can reuse it
+            if vPrice > 0 and OrctionDB and OrctionDB.vendorPrices then
+                OrctionDB.vendorPrices[name] = vPrice
+            end
+            orctionVendorCache[name] = vPrice
+        end
+        -- Keep the single-item vendor price for the sell-slot UI
+        if name == orctionSearchName and (not orctionVendorPrice or orctionVendorPrice == 0) then
+            orctionVendorPrice = vPrice
         end
 
         if buyoutPrice and buyoutPrice > 0 and count and count > 0 then
@@ -324,6 +338,7 @@ local function Orction_CollectPage()
                 buyout      = buyoutPrice,
                 count       = count,
                 costPerItem = math.floor(buyoutPrice / count),
+                vendorPrice = vPrice,
             }
             -- Always collect into similar (all results)
             table.insert(orctionSimilarResults, entry)
@@ -356,6 +371,7 @@ local function Orction_StartSearch(name)
     orctionSearchResults = {}
     orctionSimilarResults = {}
     orctionShowingSimilar = false
+    orctionVendorCache   = {}
     orctionVendorPrice   = (OrctionDB and OrctionDB.vendorPrices and OrctionDB.vendorPrices[name]) or 0
     if OrctionVendorSellValue   then OrctionVendorSellValue:SetText("--") end
     if OrctionSimilarResultsText then OrctionSimilarResultsText:Hide() end
@@ -1307,6 +1323,7 @@ local function Orction_BuildAHPanel()
             elseif orctionSellPollElapsed >= 1.0 then
                 orctionPendingSellRead = false
                 orctionSellPollElapsed = 0
+                DEFAULT_CHAT_FRAME:AddMessage("Orction: sell slot read timed out")
             end
         end
         if orctionSearchRetry then
