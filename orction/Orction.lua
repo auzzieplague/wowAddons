@@ -404,6 +404,7 @@ local function Orction_DisplayResults()
                             firstBuyout = item.buyout,
                             firstCount  = item.count }
             table.insert(groups, groupMap[k])
+            DEFAULT_CHAT_FRAME:AddMessage("Orction: group[" .. table.getn(groups) .. "] " .. k)
         end
         groupMap[k].totalCount  = groupMap[k].totalCount  + item.count
         groupMap[k].numAuctions = groupMap[k].numAuctions + 1
@@ -478,6 +479,7 @@ local function Orction_DisplayResults()
         scroll:SetVerticalScroll(0)
     end
 
+    local rowsRendered = 0
     for i = 1, table.getn(orctionResultRows) do
         local row = orctionResultRows[i]
         local g   = groups[i]
@@ -502,6 +504,7 @@ local function Orction_DisplayResults()
             end
             row.buyBtn:SetText(btnLabel)
             row.frame:Show()
+            rowsRendered = rowsRendered + 1
         else
             row.costPerItem = nil
             row.firstBuyout = nil
@@ -509,6 +512,9 @@ local function Orction_DisplayResults()
             row.frame:Hide()
         end
     end
+    DEFAULT_CHAT_FRAME:AddMessage(
+        "Orction: rendered " .. rowsRendered .. "/" .. table.getn(groups) ..
+        " groups (MAX_ROWS=" .. table.getn(orctionResultRows) .. ")")
 end
 
 local function Orction_CollectPage()
@@ -1561,7 +1567,7 @@ local function Orction_BuildAHPanel()
     local watchlistToggleBtn = CreateFrame("Button", nil, OrctionAHPanel, "UIPanelButtonTemplate")
     watchlistToggleBtn:SetWidth(120)
     watchlistToggleBtn:SetHeight(23)
-    watchlistToggleBtn:SetPoint("TOPLEFT", OrctionCreateBtn, "BOTTOMLEFT", 40, -78)
+    watchlistToggleBtn:SetPoint("BOTTOMLEFT", OrctionAHPanel, "BOTTOMLEFT", 40, 78)
     watchlistToggleBtn:SetText("Watchlist")
     watchlistToggleBtn:SetScript("OnClick", function()
         local wl = getglobal("OrctionWatchlistFrame")
@@ -1571,10 +1577,10 @@ local function Orction_BuildAHPanel()
     end)
 
     local cancelScanBtn = CreateFrame("Button", nil, OrctionAHPanel, "UIPanelButtonTemplate")
-    cancelScanBtn:SetWidth(120)
+    cancelScanBtn:SetWidth(78)
     cancelScanBtn:SetHeight(23)
-    cancelScanBtn:SetPoint("TOPLEFT", watchlistToggleBtn, "BOTTOMLEFT", 0, -10)
-    cancelScanBtn:SetText("Cancel Scan")
+    cancelScanBtn:SetPoint("BOTTOMRIGHT", OrctionAHPanel, "BOTTOMRIGHT", -8, 14)
+    cancelScanBtn:SetText("Stop Scan")
     cancelScanBtn:SetScript("OnClick", function()
         if orctionScanMode or orctionSearchActive or orctionScanNextPending or orctionSearchRetry then
             orctionScanCancel = true
@@ -1744,7 +1750,7 @@ local function Orction_BuildAHPanel()
     local COL4_X     = 480  -- buy button x
     local HEADER_Y   = -81
     local ROW_H      = 37
-    local MAX_ROWS   = 50
+    local MAX_ROWS   = 500
     local ROW_W      = 578
 
     local hName = OrctionAHPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -1886,10 +1892,10 @@ local function Orction_BuildAHPanel()
     -- ── Next Page button (bottom-right of results area) ────────────────────
 
     local nextPageBtn = CreateFrame("Button", "OrctionNextPageBtn", OrctionAHPanel, "UIPanelButtonTemplate")
-    nextPageBtn:SetWidth(100)
+    nextPageBtn:SetWidth(124)
     nextPageBtn:SetHeight(22)
-    nextPageBtn:SetPoint("BOTTOMRIGHT", scrollFrame, "BOTTOMRIGHT", 0, -26)
-    nextPageBtn:SetText("Next Page")
+    nextPageBtn:SetPoint("BOTTOMRIGHT", OrctionAHPanel, "BOTTOMRIGHT", -88, 14)
+    nextPageBtn:SetText("More Results")
     nextPageBtn:Disable()
     nextPageBtn:SetScript("OnClick", Orction_FetchNextPages)
 
