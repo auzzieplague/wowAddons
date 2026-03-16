@@ -22,6 +22,8 @@ local orctionVendorPrice     = nil   -- vendor sell price (copper) for the curre
 local orctionSellName        = nil   -- name of the item currently in the sell slot (for Create Auction)
 local orctionPendingSellRead = false -- true when waiting for sell slot info after a swap
 local orctionSellPollElapsed = 0     -- seconds spent polling for sell slot info
+local orctionSearchClassIndex = 0    -- selected class index for search (0 = none)
+local orctionSearchSubIndex   = 0    -- selected subclass index for search (0 = none)
 local ORCTION_TOOLTIP_HOOKED = false
 local orctionLastTooltipLink = nil
 local orctionLastTooltipName = nil
@@ -72,6 +74,130 @@ local function Orction_UpdateSearchingText()
     local page = (orctionSearchPage or 0) + 1
     local total = ORCTION_MAX_PAGES or 1
     OrctionSearchingText:SetText("Searching... Page " .. page .. "/" .. total)
+end
+
+local function Orction_GetClassName(index)
+    if not index or index <= 0 then return "None" end
+    local classes = { GetAuctionItemClasses() }
+    return classes[index] or "None"
+end
+
+local function Orction_GetSubClassName(classIndex, subIndex)
+    if not classIndex or classIndex <= 0 or not subIndex or subIndex <= 0 then
+        return "None"
+    end
+    local subs = { GetAuctionItemSubClasses(classIndex) }
+    return subs[subIndex] or "None"
+end
+
+local function Orction_SetSearchCategory(classIndex, subIndex)
+    orctionSearchClassIndex = classIndex or 0
+    orctionSearchSubIndex   = subIndex or 0
+    if OrctionCategoryDropDown then
+        UIDropDownMenu_SetSelectedValue(OrctionCategoryDropDown, orctionSearchClassIndex)
+        UIDropDownMenu_SetText(Orction_GetClassName(orctionSearchClassIndex), OrctionCategoryDropDown)
+    end
+    if OrctionSubcategoryDropDown then
+        if not classIndex or classIndex <= 0 then
+            UIDropDownMenu_SetText("None", OrctionSubcategoryDropDown)
+            if UIDropDownMenu_DisableDropDown then
+                UIDropDownMenu_DisableDropDown(OrctionSubcategoryDropDown)
+            else
+                local btn = getglobal(OrctionSubcategoryDropDown:GetName() .. "Button")
+                if btn then btn:Disable() end
+            end
+        else
+            UIDropDownMenu_SetSelectedValue(OrctionSubcategoryDropDown, orctionSearchSubIndex)
+            UIDropDownMenu_SetText(Orction_GetSubClassName(orctionSearchClassIndex, orctionSearchSubIndex), OrctionSubcategoryDropDown)
+            if UIDropDownMenu_EnableDropDown then
+                UIDropDownMenu_EnableDropDown(OrctionSubcategoryDropDown)
+            else
+                local btn = getglobal(OrctionSubcategoryDropDown:GetName() .. "Button")
+                if btn then btn:Enable() end
+            end
+        end
+    end
+end
+
+local function Orction_InitCategoryDropDown()
+    if not OrctionCategoryDropDown then return end
+    UIDropDownMenu_Initialize(OrctionCategoryDropDown, function()
+        local info = UIDropDownMenu_CreateInfo()
+        info.text = "None"
+        info.value = 0
+        info.func = function()
+            UIDropDownMenu_SetSelectedValue(OrctionCategoryDropDown, 0)
+            Orction_SetSearchCategory(0, 0)
+            if OrctionSubcategoryDropDown then
+                UIDropDownMenu_SetText("None", OrctionSubcategoryDropDown)
+            end
+            Orction_InitSubcategoryDropDown()
+        end
+        info.checked = (orctionSearchClassIndex == 0)
+        UIDropDownMenu_AddButton(info)
+
+        local classes = { GetAuctionItemClasses() }
+        for i = 1, table.getn(classes) do
+            local idx = i
+            local name = classes[i]
+            info = UIDropDownMenu_CreateInfo()
+            info.text = name
+            info.value = idx
+            info.func = function()
+                UIDropDownMenu_SetSelectedValue(OrctionCategoryDropDown, idx)
+                Orction_SetSearchCategory(idx, 0)
+                Orction_InitSubcategoryDropDown()
+            end
+            info.checked = (orctionSearchClassIndex == idx)
+            UIDropDownMenu_AddButton(info)
+        end
+    end)
+end
+
+function Orction_InitSubcategoryDropDown()
+    if not OrctionSubcategoryDropDown then return end
+    UIDropDownMenu_Initialize(OrctionSubcategoryDropDown, function()
+        local info = UIDropDownMenu_CreateInfo()
+        info.text = "None"
+        info.value = 0
+        info.func = function()
+            UIDropDownMenu_SetSelectedValue(OrctionSubcategoryDropDown, 0)
+            Orction_SetSearchCategory(orctionSearchClassIndex, 0)
+        end
+        info.checked = (orctionSearchSubIndex == 0)
+        UIDropDownMenu_AddButton(info)
+
+        if not orctionSearchClassIndex or orctionSearchClassIndex <= 0 then
+            return
+        end
+        local subs = { GetAuctionItemSubClasses(orctionSearchClassIndex) }
+        for i = 1, table.getn(subs) do
+            local idx = i
+            local name = subs[i]
+            info = UIDropDownMenu_CreateInfo()
+            info.text = name
+            info.value = idx
+            info.func = function()
+                UIDropDownMenu_SetSelectedValue(OrctionSubcategoryDropDown, idx)
+                Orction_SetSearchCategory(orctionSearchClassIndex, idx)
+            end
+            info.checked = (orctionSearchSubIndex == idx)
+            UIDropDownMenu_AddButton(info)
+        end
+    end)
+end
+
+local function Orction_Query(name, page)
+    local classIdx = orctionSearchClassIndex
+    local subIdx   = orctionSearchSubIndex
+    local p = page or 0
+    if classIdx and classIdx > 0 and subIdx and subIdx > 0 then
+        QueryAuctionItems(name, nil, nil, nil, classIdx, subIdx, p, nil, nil)
+    elseif classIdx and classIdx > 0 then
+        QueryAuctionItems(name, nil, nil, nil, classIdx, nil, p, nil, nil)
+    else
+        QueryAuctionItems(name, nil, nil, nil, nil, nil, p, nil, nil)
+    end
 end
 
 -- ── Vendor price cache (tooltip hook) ─────────────────────────────────────
@@ -382,7 +508,7 @@ local function Orction_CollectPage()
     end
 end
 
-local function Orction_StartSearch(name)
+local function Orction_StartSearch(name, classIndex, subIndex)
     -- Cancel any active scan
     orctionScanMode          = false
     orctionScanQueue         = nil
@@ -400,6 +526,7 @@ local function Orction_StartSearch(name)
     orctionShowingSimilar = false
     orctionVendorCache   = {}
     orctionVendorPrice   = (OrctionDB and OrctionDB.vendorPrices and OrctionDB.vendorPrices[name]) or 0
+    Orction_SetSearchCategory(classIndex or orctionSearchClassIndex, subIndex or orctionSearchSubIndex)
     if OrctionVendorSellValue   then OrctionVendorSellValue:SetText("--") end
     if OrctionSimilarResultsText then OrctionSimilarResultsText:Hide() end
     for i = 1, table.getn(orctionResultRows) do
@@ -408,7 +535,7 @@ local function Orction_StartSearch(name)
     if OrctionSearchingText then OrctionSearchingText:Show() end
     Orction_UpdateSearchingText()
     if OrctionNoResultsText  then OrctionNoResultsText:Hide()  end
-    QueryAuctionItems(name, nil, nil, nil, nil, nil, 0, nil, nil)
+    Orction_Query(name, 0)
 end
 
 local function Orction_TryBuy()
@@ -515,7 +642,7 @@ local function Orction_CompleteItemDrop(name, texture, count)
     if OrctionDB then OrctionDB.stackCounts[name] = count end
     orctionSellName = name
     orctionVendorPrice = Orction_GetVendorPrice(name)
-    Orction_StartSearch(name)
+    Orction_StartSearch(name, 0, 0)
 end
 
 local function Orction_HandleSellSlotItem(name, texture, count)
@@ -828,7 +955,7 @@ local function Orction_DoTextSearch()
         OrctionSearchBox:SetText(corrected)
     end
     orctionVendorPrice = Orction_GetVendorPrice(text)
-    Orction_StartSearch(text)
+    Orction_StartSearch(text, orctionSearchClassIndex, orctionSearchSubIndex)
 end
 
 -- ── Watchlist helpers ─────────────────────────────────────────────────────
@@ -837,6 +964,18 @@ local function Orction_GetWatchlist()
     if not OrctionDB then OrctionDB = {} end
     if not OrctionDB.watchlist then OrctionDB.watchlist = {} end
     return OrctionDB.watchlist
+end
+
+local function Orction_NormalizeWatchEntry(entry)
+    if type(entry) == "string" then
+        return { name = entry, classIndex = 0, subIndex = 0 }
+    end
+    if type(entry) == "table" and entry.name then
+        if not entry.classIndex then entry.classIndex = 0 end
+        if not entry.subIndex then entry.subIndex = 0 end
+        return entry
+    end
+    return nil
 end
 
 local function Orction_RefreshWatchlist()
@@ -850,26 +989,34 @@ local function Orction_RefreshWatchlist()
         local row = orctionWatchlistRows[i]
         if not row then break end
         if idx <= count then
-            row.nameLabel:SetText(list[idx])
-            row.nameBtn._itemName = list[idx]
-            row.removeBtn._index  = idx
-            row:Show()
+            local entry = Orction_NormalizeWatchEntry(list[idx])
+            if entry then
+                row.nameLabel:SetText(entry.name)
+                row.nameBtn._entry = entry
+                row.detailsBtn._entry = entry
+                row.removeBtn._index  = idx
+                row:Show()
+            else
+                row:Hide()
+            end
         else
             row:Hide()
         end
     end
 end
 
-local function Orction_AddToWatchlist(name)
+local function Orction_AddToWatchlist(name, classIndex, subIndex)
     if not name or string.len(name) == 0 then return end
     local list = Orction_GetWatchlist()
     for i = 1, table.getn(list) do
-        if list[i] == name then
+        local entry = Orction_NormalizeWatchEntry(list[i])
+        if entry and entry.name == name and (entry.classIndex or 0) == (classIndex or 0)
+           and (entry.subIndex or 0) == (subIndex or 0) then
             DEFAULT_CHAT_FRAME:AddMessage("Orction: '" .. name .. "' already in watchlist")
             return
         end
     end
-    table.insert(list, name)
+    table.insert(list, { name = name, classIndex = classIndex or 0, subIndex = subIndex or 0 })
     DEFAULT_CHAT_FRAME:AddMessage("Orction: added '" .. name .. "' to watchlist (" .. table.getn(list) .. " items)")
     Orction_RefreshWatchlist()
 end
@@ -896,7 +1043,12 @@ local function Orction_ScanNext()
             "Orction: scan complete — " .. table.getn(orctionSimilarResults) .. " results")
         return
     end
-    local name = orctionScanQueue[orctionScanIndex]
+    local entry = Orction_NormalizeWatchEntry(orctionScanQueue[orctionScanIndex])
+    if not entry then
+        Orction_ScanNext()
+        return
+    end
+    local name = entry.name
     orctionSearchName        = name
     orctionSearchPage        = 0
     orctionSearchActive      = true
@@ -911,7 +1063,8 @@ local function Orction_ScanNext()
             "Scanning " .. orctionScanIndex .. "/" .. total .. ": " .. name)
         OrctionSearchingText:Show()
     end
-    QueryAuctionItems(name, nil, nil, nil, nil, nil, 0, nil, nil)
+    Orction_SetSearchCategory(entry.classIndex or 0, entry.subIndex or 0)
+    Orction_Query(name, 0)
 end
 
 local function Orction_StartScan()
@@ -983,8 +1136,7 @@ local function Orction_AHPanel_OnUpdate()
             orctionPageProcessed = false
             orctionWaitTimeout   = 0
             orctionQueryDelay    = 0
-            QueryAuctionItems(orctionSearchName, nil, nil, nil, nil, nil,
-                              orctionSearchPage, nil, nil)
+            Orction_Query(orctionSearchName, orctionSearchPage)
         end
     elseif orctionSearchActive then
         orctionWaitTimeout = orctionWaitTimeout + arg1
@@ -1011,6 +1163,24 @@ local function Orction_AHPanel_OnUpdate()
                 else
                     Orction_DisplayResults()
                 end
+            end
+        end
+    end
+end
+
+local function Orction_AHPanel_OnEvent()
+    if event == "AUCTION_ITEM_LIST_UPDATE" then
+        if orctionBuyPending then
+            Orction_TryBuy()
+        else
+            Orction_CollectPage()
+        end
+    elseif event == "NEW_AUCTION_UPDATE" then
+        if orctionPendingSellRead then
+            local name, texture, count = GetAuctionSellItemInfo()
+            if name then
+                orctionPendingSellRead = false
+                Orction_HandleSellSlotItem(name, texture, count)
             end
         end
     end
@@ -1057,7 +1227,7 @@ local function Orction_BuildAHPanel()
     addWatchBtn:SetScript("OnClick", function()
         local text = OrctionSearchBox:GetText()
         if text and string.len(text) > 0 then
-            Orction_AddToWatchlist(text)
+            Orction_AddToWatchlist(text, orctionSearchClassIndex, orctionSearchSubIndex)
         end
     end)
 
@@ -1070,6 +1240,25 @@ local function Orction_BuildAHPanel()
             OrctionDB.settings.exactMatch = not (this:GetChecked() == nil)
         end
     end)
+
+    OrctionCategoryDropDown = CreateFrame("Frame", "OrctionCategoryDropDown", OrctionAHPanel, "UIDropDownMenuTemplate")
+    OrctionCategoryDropDown:SetPoint("LEFT", OrctionExactMatchCheck, "RIGHT", 55, -2)
+    UIDropDownMenu_SetWidth(110, OrctionCategoryDropDown)
+    UIDropDownMenu_SetText("None", OrctionCategoryDropDown)
+
+    OrctionSubcategoryDropDown = CreateFrame("Frame", "OrctionSubcategoryDropDown", OrctionAHPanel, "UIDropDownMenuTemplate")
+    OrctionSubcategoryDropDown:SetPoint("LEFT", OrctionCategoryDropDown, "RIGHT", 10, 0)
+    UIDropDownMenu_SetWidth(120, OrctionSubcategoryDropDown)
+    UIDropDownMenu_SetText("None", OrctionSubcategoryDropDown)
+    if UIDropDownMenu_DisableDropDown then
+        UIDropDownMenu_DisableDropDown(OrctionSubcategoryDropDown)
+    else
+        local btn = getglobal("OrctionSubcategoryDropDownButton")
+        if btn then btn:Disable() end
+    end
+
+    Orction_InitCategoryDropDown()
+    Orction_InitSubcategoryDropDown()
 
     -- ── Left panel: absolute positions cloned from AuctionFrameAuctions children ─
     -- All SetPoint anchors are relative to OrctionAHPanel TOPLEFT (= AuctionFrame TOPLEFT).
@@ -1254,6 +1443,38 @@ local function Orction_BuildAHPanel()
     wlCloseBtn:SetPoint("TOPRIGHT", wlFrame, "TOPRIGHT", 2, 2)
     wlCloseBtn:SetScript("OnClick", function() wlFrame:Hide() end)
 
+    OrctionWatchlistDetailsFrame = CreateFrame("Frame", "OrctionWatchlistDetailsFrame", wlFrame)
+    OrctionWatchlistDetailsFrame:SetWidth(180)
+    OrctionWatchlistDetailsFrame:SetHeight(70)
+    OrctionWatchlistDetailsFrame:SetPoint("TOPLEFT", wlFrame, "TOPLEFT", 6, -24)
+    OrctionWatchlistDetailsFrame:SetFrameLevel(wlFrame:GetFrameLevel() + 2)
+    OrctionWatchlistDetailsFrame:SetBackdrop({
+        bgFile   = "Interface\\Buttons\\WHITE8X8",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile     = true, tileSize = 8, edgeSize = 12,
+        insets   = { left = 3, right = 3, top = 3, bottom = 3 },
+    })
+    OrctionWatchlistDetailsFrame:SetBackdropColor(0.02, 0.02, 0.06, 0.95)
+    OrctionWatchlistDetailsFrame:Hide()
+
+    OrctionWatchlistDetailsName = OrctionWatchlistDetailsFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    OrctionWatchlistDetailsName:SetPoint("TOPLEFT", OrctionWatchlistDetailsFrame, "TOPLEFT", 6, -6)
+    OrctionWatchlistDetailsName:SetText("")
+
+    OrctionWatchlistDetailsCat = OrctionWatchlistDetailsFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    OrctionWatchlistDetailsCat:SetPoint("TOPLEFT", OrctionWatchlistDetailsName, "BOTTOMLEFT", 0, -4)
+    OrctionWatchlistDetailsCat:SetText("")
+
+    OrctionWatchlistDetailsSub = OrctionWatchlistDetailsFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    OrctionWatchlistDetailsSub:SetPoint("TOPLEFT", OrctionWatchlistDetailsCat, "BOTTOMLEFT", 0, -2)
+    OrctionWatchlistDetailsSub:SetText("")
+
+    local wlDetailsCloseBtn = CreateFrame("Button", nil, OrctionWatchlistDetailsFrame, "UIPanelCloseButton")
+    wlDetailsCloseBtn:SetWidth(18)
+    wlDetailsCloseBtn:SetHeight(18)
+    wlDetailsCloseBtn:SetPoint("TOPRIGHT", OrctionWatchlistDetailsFrame, "TOPRIGHT", 2, 2)
+    wlDetailsCloseBtn:SetScript("OnClick", function() OrctionWatchlistDetailsFrame:Hide() end)
+
     -- FauxScrollFrame provides only the scrollbar widget — rows must NOT be its children
     -- (ScrollFrame clips its children; rows go in a plain sibling frame instead)
     OrctionWatchlistScroll = CreateFrame("ScrollFrame", "OrctionWatchlistScroll", wlFrame, "FauxScrollFrameTemplate")
@@ -1276,12 +1497,17 @@ local function Orction_BuildAHPanel()
         row:SetPoint("TOPLEFT", wlRowsFrame, "TOPLEFT", 0, -(i - 1) * WL_ROW_H)
 
         local nameBtn = CreateFrame("Button", nil, row)
-        nameBtn:SetWidth(142)
+        nameBtn:SetWidth(118)
         nameBtn:SetHeight(WL_ROW_H)
         nameBtn:SetPoint("LEFT", row, "LEFT", 2, 0)
         nameBtn:SetScript("OnClick", function()
-            if this._itemName then
-                OrctionSearchBox:SetText(this._itemName)
+            if this._entry and this._entry.name then
+                OrctionSearchBox:SetText(this._entry.name)
+                Orction_SetSearchCategory(this._entry.classIndex or 0, this._entry.subIndex or 0)
+                UIDropDownMenu_SetSelectedValue(OrctionCategoryDropDown, orctionSearchClassIndex)
+                UIDropDownMenu_SetSelectedValue(OrctionSubcategoryDropDown, orctionSearchSubIndex)
+                UIDropDownMenu_SetText(Orction_GetClassName(orctionSearchClassIndex), OrctionCategoryDropDown)
+                UIDropDownMenu_SetText(Orction_GetSubClassName(orctionSearchClassIndex, orctionSearchSubIndex), OrctionSubcategoryDropDown)
                 Orction_DoTextSearch()
             end
         end)
@@ -1289,6 +1515,20 @@ local function Orction_BuildAHPanel()
         local nameLabel = nameBtn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         nameLabel:SetAllPoints()
         nameLabel:SetJustifyH("LEFT")
+
+        local detailsBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+        detailsBtn:SetWidth(18)
+        detailsBtn:SetHeight(WL_ROW_H - 2)
+        detailsBtn:SetPoint("RIGHT", row, "RIGHT", -22, 0)
+        detailsBtn:SetText("...")
+        detailsBtn:SetScript("OnClick", function()
+            if OrctionWatchlistDetailsFrame and this._entry then
+                OrctionWatchlistDetailsName:SetText(this._entry.name or "")
+                OrctionWatchlistDetailsCat:SetText("Category: " .. Orction_GetClassName(this._entry.classIndex or 0))
+                OrctionWatchlistDetailsSub:SetText("Subcategory: " .. Orction_GetSubClassName(this._entry.classIndex or 0, this._entry.subIndex or 0))
+                OrctionWatchlistDetailsFrame:Show()
+            end
+        end)
 
         local removeBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
         removeBtn:SetWidth(18)
@@ -1303,6 +1543,7 @@ local function Orction_BuildAHPanel()
 
         row.nameBtn   = nameBtn
         row.nameLabel = nameLabel
+        row.detailsBtn = detailsBtn
         row.removeBtn = removeBtn
         row:Hide()
         orctionWatchlistRows[i] = row
@@ -1420,7 +1661,7 @@ local function Orction_BuildAHPanel()
             local row = orctionResultRows[idx]
             if row and row.firstBuyout and row.itemName then
                 orctionBuyPending = { buyout = row.firstBuyout, name = row.itemName }
-                QueryAuctionItems(row.itemName, nil, nil, nil, nil, nil, 0, nil, nil)
+                Orction_Query(row.itemName, 0)
             end
         end)
 
@@ -1474,23 +1715,7 @@ local function Orction_BuildAHPanel()
 
     OrctionAHPanel:RegisterEvent("AUCTION_ITEM_LIST_UPDATE")
     OrctionAHPanel:RegisterEvent("NEW_AUCTION_UPDATE")
-    OrctionAHPanel:SetScript("OnEvent", function()
-        if event == "AUCTION_ITEM_LIST_UPDATE" then
-            if orctionBuyPending then
-                Orction_TryBuy()
-            else
-                Orction_CollectPage()
-            end
-        elseif event == "NEW_AUCTION_UPDATE" then
-            if orctionPendingSellRead then
-                local name, texture, count = GetAuctionSellItemInfo()
-                if name then
-                    orctionPendingSellRead = false
-                    Orction_HandleSellSlotItem(name, texture, count)
-                end
-            end
-        end
-    end)
+    OrctionAHPanel:SetScript("OnEvent", Orction_AHPanel_OnEvent)
 
     -- Pace multi-page queries and time out if a page never returns data
     OrctionAHPanel:SetScript("OnUpdate", Orction_AHPanel_OnUpdate)
