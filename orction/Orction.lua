@@ -347,6 +347,119 @@ local function Orction_HookVendorPriceTooltip()
     end)
 end
 
+-- ── Result row factory (called lazily from Orction_DisplayResults) ────────
+-- Column constants mirror those in Orction_BuildAHPanel.
+local RC_COL_ICON = 6
+local RC_COL_NAME = 34
+local RC_COL1     = 178
+local RC_COL2     = 318
+local RC_COL3     = 412
+local RC_COL4     = 480
+local RC_ROW_H    = 37
+local RC_ROW_W    = 578
+
+local function Orction_CreateResultRow(i)
+    local scrollChild = getglobal("OrctionResultScrollChild")
+    if not scrollChild then return end
+
+    local yOff   = -((i - 1) * RC_ROW_H)
+    local rowBtn = CreateFrame("Button", nil, scrollChild)
+    rowBtn:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 0, yOff)
+    rowBtn:SetWidth(RC_ROW_W)
+    rowBtn:SetHeight(RC_ROW_H)
+
+    local bg = rowBtn:CreateTexture(nil, "BACKGROUND")
+    if math.mod(i, 2) == 0 then
+        bg:SetTexture(0.09, 0.09, 0.19, 0.5)
+    else
+        bg:SetTexture(0, 0, 0.09, 0.3)
+    end
+    bg:SetAllPoints()
+
+    local hl = rowBtn:CreateTexture(nil, "HIGHLIGHT")
+    hl:SetTexture(0.3, 0.3, 0.6, 0.4)
+    hl:SetAllPoints()
+
+    local iconTex = rowBtn:CreateTexture(nil, "ARTWORK")
+    iconTex:SetWidth(26)
+    iconTex:SetHeight(26)
+    iconTex:SetPoint("LEFT", rowBtn, "LEFT", RC_COL_ICON, 0)
+    iconTex:Hide()
+
+    local nameFS = rowBtn:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    nameFS:SetPoint("TOPLEFT", rowBtn, "TOPLEFT", RC_COL_NAME, -13)
+    nameFS:SetWidth(138)
+    nameFS:SetJustifyH("LEFT")
+
+    local costFS = rowBtn:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    costFS:SetPoint("TOPLEFT", rowBtn, "TOPLEFT", RC_COL1, -13)
+
+    local qtyFS = rowBtn:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    qtyFS:SetPoint("TOPLEFT", rowBtn, "TOPLEFT", RC_COL2, -13)
+
+    local aucFS = rowBtn:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    aucFS:SetPoint("TOPLEFT", rowBtn, "TOPLEFT", RC_COL3, -13)
+
+    local buyBtn = CreateFrame("Button", nil, rowBtn, "UIPanelButtonTemplate")
+    buyBtn:SetWidth(80)
+    buyBtn:SetHeight(22)
+    buyBtn:SetPoint("LEFT", rowBtn, "LEFT", RC_COL4, 0)
+    buyBtn:SetText("Buy")
+    local buyBtnFS = buyBtn:GetFontString()
+    if buyBtnFS then
+        local fontFile, _, flags = buyBtnFS:GetFont()
+        buyBtnFS:SetFont(fontFile or STANDARD_TEXT_FONT, 9, flags or "")
+    end
+
+    local idx = i
+    buyBtn:SetScript("OnClick", function()
+        local row = orctionResultRows[idx]
+        if row and row.firstBuyout and row.itemName then
+            orctionBuyPending = { buyout = row.firstBuyout, name = row.itemName }
+            Orction_Query(row.itemName, 0)
+        end
+    end)
+
+    buyBtn:SetScript("OnMouseDown", function() this:GetParent():SetScript("OnClick", nil) end)
+    buyBtn:SetScript("OnMouseUp", function()
+        this:GetParent():SetScript("OnClick", function()
+            local row = orctionResultRows[idx]
+            if row and row.costPerItem then
+                local count = math.max(1, tonumber(OrctionCountBox:GetText()) or 1)
+                MoneyInputFrame_SetCopper(OrctionBuyout, row.costPerItem * count)
+            end
+        end)
+    end)
+
+    rowBtn:SetScript("OnClick", function()
+        local row = orctionResultRows[idx]
+        if row and row.costPerItem then
+            local count = math.max(1, tonumber(OrctionCountBox:GetText()) or 1)
+            MoneyInputFrame_SetCopper(OrctionBuyout, row.costPerItem * count)
+        end
+    end)
+
+    orctionResultRows[i] = { frame = rowBtn, cost = costFS, qty = qtyFS,
+                              auctions = aucFS, buyBtn = buyBtn, bg = bg,
+                              nameFS = nameFS, iconTex = iconTex,
+                              isEven = (math.mod(i, 2) == 0),
+                              costPerItem = nil, firstBuyout = nil, itemName = nil, itemId = nil }
+
+    rowBtn:SetScript("OnEnter", function()
+        local row = orctionResultRows[idx]
+        if row and row.itemId then
+            GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+            GameTooltip:SetHyperlink("item:" .. row.itemId)
+            GameTooltip:Show()
+        end
+    end)
+    rowBtn:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+
+    rowBtn:Hide()
+end
+
 -- ── Search logic ──────────────────────────────────────────────────────────
 
 local function Orction_DisplayResults()
@@ -398,6 +511,7 @@ local function Orction_DisplayResults()
         if not groupMap[k] then
             groupMap[k] = { name        = item.name,
                             texture     = item.texture,
+                            itemId      = item.itemId,
                             costPerItem = item.costPerItem,
                             vendorPrice = item.vendorPrice or 0,
                             totalCount  = 0, numAuctions = 0,
@@ -462,21 +576,32 @@ local function Orction_DisplayResults()
         end
     end
 
+    -- Grow the row pool on demand — frames are permanent so this only fires when new rows are needed.
+    local needed = table.getn(groups)
+    while table.getn(orctionResultRows) < needed do
+        Orction_CreateResultRow(table.getn(orctionResultRows) + 1)
+    end
+
     -- Size both the scroll child and the scroll frame to fit content exactly,
     -- capped at the maximum viewport height (~8.5 rows).
-    local visibleCount = table.getn(groups)
+    local visibleCount = needed
     DEFAULT_CHAT_FRAME:AddMessage("Orction: groups=" .. visibleCount .. " (multiItem=" .. tostring(multiItem) .. ")")
-    local ROW_H_PX     = 37
-    local MAX_H        = 316
-    local contentH     = visibleCount * ROW_H_PX
-    if contentH < 1 then contentH = ROW_H_PX end
+    local MAX_H    = 316
+    local contentH = visibleCount * RC_ROW_H
+    if contentH < 1 then contentH = RC_ROW_H end
     if OrctionResultScrollChild then
         OrctionResultScrollChild:SetHeight(contentH)
     end
     local scroll = getglobal("OrctionResultScroll")
     if scroll then
-        scroll:SetHeight(math.min(contentH, MAX_H))
+        local viewH = math.min(contentH, MAX_H)
+        scroll:SetHeight(viewH)
         scroll:SetVerticalScroll(0)
+        local scrollBar = getglobal("OrctionResultScrollScrollBar")
+        if scrollBar then
+            scrollBar:SetMinMaxValues(0, math.max(0, contentH - viewH))
+            scrollBar:SetValue(0)
+        end
     end
 
     local rowsRendered = 0
@@ -487,6 +612,7 @@ local function Orction_DisplayResults()
             row.costPerItem = g.costPerItem
             row.firstBuyout = g.firstBuyout
             row.itemName    = g.name
+            row.itemId      = g.itemId
             row.cost:SetText(CopperToString(g.costPerItem))
             row.qty:SetText(tostring(g.totalCount))
             row.auctions:SetText(tostring(g.numAuctions))
@@ -509,6 +635,7 @@ local function Orction_DisplayResults()
             row.costPerItem = nil
             row.firstBuyout = nil
             row.itemName    = nil
+            row.itemId      = nil
             row.frame:Hide()
         end
     end
@@ -707,8 +834,19 @@ local function Orction_TryBuy()
             return
         end
     end
+    -- Auction no longer exists — remove it from both result sets and refresh display.
+    local function removeFirst(t)
+        for j = 1, table.getn(t) do
+            if t[j].buyout == buyBuyout and (t[j].name or "") == (buyName or "") then
+                table.remove(t, j) return
+            end
+        end
+    end
+    removeFirst(orctionSearchResults)
+    removeFirst(orctionSimilarResults)
     orctionBuyPending = nil
-    DEFAULT_CHAT_FRAME:AddMessage("Orction: Auction not found - it may have sold.")
+    DEFAULT_CHAT_FRAME:AddMessage("Orction: Auction not found (sold/expired) — removed from list.")
+    Orction_DisplayResults()
 end
 
 -- ── AH panel state ────────────────────────────────────────────────────────
@@ -1101,6 +1239,7 @@ local function Orction_DoTextSearch()
     else
         text = ""  -- empty search: browse by category / usable filter only
     end
+    if GetAuctionSellItemInfo() then ClickAuctionSellItemButton() end
     orctionVendorPrice = Orction_GetVendorPrice(text)
     Orction_StartSearch(text, orctionSearchClassIndex, orctionSearchSubIndex)
 end
@@ -1453,10 +1592,6 @@ local function Orction_BuildAHPanel()
     OrctionItemTexture:SetPoint("TOPLEFT", itemSlot, "TOPLEFT", 0, 0)
     OrctionItemTexture:Hide()
 
-    --local slotBg = itemSlot:CreateTexture(nil, "BACKGROUND")
-    --slotBg:SetTexture("Interface\\Buttons\\UI-Slot-Background")
-    --slotBg:SetAllPoints()
-
     itemSlot:SetScript("OnReceiveDrag", Orction_OnItemDrop)
     itemSlot:SetScript("OnClick", function()
         if CursorHasItem() then
@@ -1493,7 +1628,7 @@ local function Orction_BuildAHPanel()
     -- Vendor Sell (below item slot)
     local vendorSellLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
     vendorSellLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 73, -138)
-    vendorSellLabel:SetText("Vendor Item:")
+    vendorSellLabel:SetText("Sell To Vendor:")
 
     OrctionVendorSellValue = OrctionAHPanel:CreateFontString("OrctionVendorSellValue", "ARTWORK", "GameFontHighlightSmall")
     OrctionVendorSellValue:SetPoint("LEFT", vendorSellLabel, "RIGHT", 4, 0)
@@ -1540,11 +1675,11 @@ local function Orction_BuildAHPanel()
 
     -- Buyout Price  ────────────────────────────────────────────────────────────
     local buyoutLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    buyoutLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 33, -200)
-    buyoutLabel:SetText("Buyout Price")
+    buyoutLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 30, -205)
+    buyoutLabel:SetText("Sell:")
 
     OrctionBuyout = CreateFrame("Frame", "OrctionBuyout", OrctionAHPanel, "MoneyInputFrameTemplate")
-    OrctionBuyout:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 33, -215)
+    OrctionBuyout:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 70, -200)
     ResizeMoneyInputFrame("OrctionBuyout")
 
     -- Deposit  ────────────────────────────────────────────────────────────────
@@ -1558,16 +1693,17 @@ local function Orction_BuildAHPanel()
 
     -- Create Auction button  ───────────────────────────────────────────────────
     OrctionCreateBtn = CreateFrame("Button", "OrctionCreateBtn", OrctionAHPanel, "UIPanelButtonTemplate")
-    OrctionCreateBtn:SetWidth(191)
-    OrctionCreateBtn:SetHeight(20)
+    OrctionCreateBtn:SetWidth(150)
+    OrctionCreateBtn:SetHeight(23)
     OrctionCreateBtn:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 18, -260)
     OrctionCreateBtn:SetText("Create Auction")
     OrctionCreateBtn:SetScript("OnClick", Orction_CreateAuction)
 
     local watchlistToggleBtn = CreateFrame("Button", nil, OrctionAHPanel, "UIPanelButtonTemplate")
-    watchlistToggleBtn:SetWidth(120)
+    watchlistToggleBtn:SetWidth(80)
+    watchlistToggleBtn:SetWidth(80)
     watchlistToggleBtn:SetHeight(23)
-    watchlistToggleBtn:SetPoint("BOTTOMLEFT", OrctionAHPanel, "BOTTOMLEFT", 40, 78)
+    watchlistToggleBtn:SetPoint("BOTTOMLEFT", OrctionAHPanel, "BOTTOMLEFT", 22, 66)
     watchlistToggleBtn:SetText("Watchlist")
     watchlistToggleBtn:SetScript("OnClick", function()
         local wl = getglobal("OrctionWatchlistFrame")
@@ -1750,7 +1886,6 @@ local function Orction_BuildAHPanel()
     local COL4_X     = 480  -- buy button x
     local HEADER_Y   = -81
     local ROW_H      = 37
-    local MAX_ROWS   = 500
     local ROW_W      = 578
 
     local hName = OrctionAHPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -1781,97 +1916,8 @@ local function Orction_BuildAHPanel()
 
     local scrollChild = CreateFrame("Frame", "OrctionResultScrollChild", scrollFrame)
     scrollChild:SetWidth(ROW_W)
-    scrollChild:SetHeight(MAX_ROWS * ROW_H)
+    scrollChild:SetHeight(ROW_H)   -- grows dynamically as rows are created
     scrollFrame:SetScrollChild(scrollChild)
-
-    for i = 1, MAX_ROWS do
-        local idx  = i
-        local yOff = -((i - 1) * ROW_H)
-
-        local rowBtn = CreateFrame("Button", nil, scrollChild)
-        rowBtn:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 0, yOff)
-        rowBtn:SetWidth(ROW_W)
-        rowBtn:SetHeight(ROW_H)
-
-        local bg = rowBtn:CreateTexture(nil, "BACKGROUND")
-        if math.mod(i, 2) == 0 then
-            bg:SetTexture(0.09, 0.09, 0.19, 0.5)
-        else
-            bg:SetTexture(0, 0, 0.09, 0.3)
-        end
-        bg:SetAllPoints()
-
-        local hl = rowBtn:CreateTexture(nil, "HIGHLIGHT")
-        hl:SetTexture(0.3, 0.3, 0.6, 0.4)
-        hl:SetAllPoints()
-
-        local iconTex = rowBtn:CreateTexture(nil, "ARTWORK")
-        iconTex:SetWidth(26)
-        iconTex:SetHeight(26)
-        iconTex:SetPoint("LEFT", rowBtn, "LEFT", COL_ICON_X, 0)
-        iconTex:Hide()
-
-        local nameFS = rowBtn:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-        nameFS:SetPoint("TOPLEFT", rowBtn, "TOPLEFT", COL_NAME_X, -13)
-        nameFS:SetWidth(138)
-        nameFS:SetJustifyH("LEFT")
-
-        local costFS = rowBtn:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-        costFS:SetPoint("TOPLEFT", rowBtn, "TOPLEFT", COL1_X, -13)
-
-        local qtyFS = rowBtn:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-        qtyFS:SetPoint("TOPLEFT", rowBtn, "TOPLEFT", COL2_X, -13)
-
-        local aucFS = rowBtn:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-        aucFS:SetPoint("TOPLEFT", rowBtn, "TOPLEFT", COL3_X, -13)
-
-        local buyBtn = CreateFrame("Button", nil, rowBtn, "UIPanelButtonTemplate")
-        buyBtn:SetWidth(80)
-        buyBtn:SetHeight(22)
-        buyBtn:SetPoint("LEFT", rowBtn, "LEFT", COL4_X, 0)
-        buyBtn:SetText("Buy")
-        local buyBtnFS = buyBtn:GetFontString()
-        if buyBtnFS then
-            local fontFile, _, flags = buyBtnFS:GetFont()
-            buyBtnFS:SetFont(fontFile or STANDARD_TEXT_FONT, 9, flags or "")
-        end
-        buyBtn:SetScript("OnClick", function()
-            local row = orctionResultRows[idx]
-            if row and row.firstBuyout and row.itemName then
-                orctionBuyPending = { buyout = row.firstBuyout, name = row.itemName }
-                Orction_Query(row.itemName, 0)
-            end
-        end)
-
-        -- Prevent row click when clicking the buy button
-        buyBtn:SetScript("OnMouseDown", function() this:GetParent():SetScript("OnClick", nil) end)
-        buyBtn:SetScript("OnMouseUp",   function()
-            this:GetParent():SetScript("OnClick", function()
-                local row = orctionResultRows[idx]
-                if row and row.costPerItem then
-                    local count = math.max(1, tonumber(OrctionCountBox:GetText()) or 1)
-                    local price = row.costPerItem * count
-                    MoneyInputFrame_SetCopper(OrctionBuyout, price)
-                end
-            end)
-        end)
-
-        rowBtn:SetScript("OnClick", function()
-            local row = orctionResultRows[idx]
-            if row and row.costPerItem then
-                local count = math.max(1, tonumber(OrctionCountBox:GetText()) or 1)
-                local price = row.costPerItem * count
-                MoneyInputFrame_SetCopper(OrctionBuyout, price)
-            end
-        end)
-
-        orctionResultRows[i] = { frame = rowBtn, cost = costFS, qty = qtyFS,
-                                  auctions = aucFS, buyBtn = buyBtn, bg = bg,
-                                  nameFS = nameFS, iconTex = iconTex,
-                                  isEven = (math.mod(i, 2) == 0),
-                                  costPerItem = nil, firstBuyout = nil, itemName = nil }
-        rowBtn:Hide()
-    end
 
     -- Status labels shown in place of the results table
     OrctionSearchingText = scrollChild:CreateFontString("OrctionSearchingText", "OVERLAY", "GameFontHighlight")
@@ -1985,6 +2031,25 @@ eventFrame:SetScript("OnEvent", function()
             OrctionDB.vendorPrices  = OrctionDB.vendorPrices  or {}
             DEFAULT_CHAT_FRAME:AddMessage(ADDON_NAME .. " initialised")
             Orction_HookVendorPriceTooltip()
+            if not Orction_ErrorHandlerInstalled and seterrorhandler then
+                Orction_ErrorHandlerInstalled = true
+                local prevHandler = geterrorhandler and geterrorhandler() or nil
+                seterrorhandler(function(err)
+                    local msg = tostring(err or "")
+                    local isOrction = string.find(msg, "Interface\\\\AddOns\\\\Orction") or
+                                      string.find(msg, "Orction%.lua") or
+                                      string.find(msg, "OrctionPostbox%.lua") or
+                                      string.find(msg, "OrctionSettings%.lua") or
+                                      string.find(msg, "OrctionTooltip%.lua")
+                    if isOrction then
+                        DEFAULT_CHAT_FRAME:AddMessage("Orction: " .. msg)
+                        return
+                    end
+                    if prevHandler then
+                        prevHandler(err)
+                    end
+                end)
+            end
         elseif string.lower(arg1) == "blizzard_auctionui" then
             Orction_SetupAH()
             eventFrame:RegisterEvent("AUCTION_HOUSE_SHOW")
