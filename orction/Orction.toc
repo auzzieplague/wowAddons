@@ -8,4 +8,6 @@
 Database.lua
 OrctionPostbox.lua
 OrctionVendor.lua
+OrctionTooltip.lua
+OrctionSettings.lua
 Orction.lua

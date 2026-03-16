@@ -61,6 +61,10 @@ local function OrctionPostal_MailHasItemOrMoney(i)
     return hasItem or hasMoney, COD
 end
 
+local function OrctionPostal_PostEnabled()
+    return OrctionDB and OrctionDB.settings and OrctionDB.settings.postEnabled == true
+end
+
 local function OrctionPostal_FindNextMail()
     local num = GetInboxNumItems()
     for i = 1, num do
@@ -72,8 +76,31 @@ local function OrctionPostal_FindNextMail()
     return nil
 end
 
+local function OrctionPostal_DeleteEmptyMail()
+    local num = GetInboxNumItems()
+    for i = num, 1, -1 do
+        local _, _, _, _, money, COD, _, _, hasItem, wasRead = GetInboxHeaderInfo(i)
+        local hasMoney = (money and money > 0) or false
+        local itemName = nil
+        if GetInboxItem then
+            itemName = GetInboxItem(i)
+        end
+        -- Only delete mail we are confident is empty and already read.
+        if not hasItem and not itemName and not hasMoney and (not COD or COD == 0) and wasRead == 1 then
+            DeleteInboxItem(i)
+        end
+    end
+end
+
 local function OrctionPostal_UpdateButton(btn)
     if not btn then return end
+    if not OrctionPostal_PostEnabled() then
+        btn:Hide()
+        return
+    end
+    if not btn:IsShown() then
+        btn:Show()
+    end
     if OrctionPostal_FindNextMail() then
         btn:SetText("Open Next")
         btn:Enable()
@@ -84,18 +111,19 @@ local function OrctionPostal_UpdateButton(btn)
 end
 
 local function OrctionPostal_CreateButton()
-    if OrctionPostalOpenBtn or not InboxFrame then return end
+    if OrctionPostalOpenBtn or not InboxFrame or not OrctionPostal_PostEnabled() then return end
 
     OrctionPostalOpenBtn = CreateFrame("Button", "OrctionPostalOpenBtn", InboxFrame, "UIPanelButtonTemplate")
     OrctionPostalOpenBtn:SetWidth(90)
     OrctionPostalOpenBtn:SetHeight(22)
-    OrctionPostalOpenBtn:SetPoint("TOPLEFT", InboxFrame, "TOPLEFT", 48, -62)
+    OrctionPostalOpenBtn:SetPoint("TOPLEFT", InboxFrame, "TOPLEFT", 75, -45)
     OrctionPostalOpenBtn:SetText("Open All")
     OrctionPostalOpenBtn:SetScript("OnClick", function()
         local idx = OrctionPostal_FindNextMail()
         if idx then
             TakeInboxItem(idx)
             TakeInboxMoney(idx)
+            OrctionPostal_DeleteEmptyMail()
         else
             if CheckInbox then CheckInbox() end
         end
@@ -125,6 +153,7 @@ postalEvents:SetScript("OnEvent", function()
             end
         end)
     elseif event == "MAIL_INBOX_UPDATE" or event == "INBOX_UPDATE" then
+        OrctionPostal_DeleteEmptyMail()
         OrctionPostal_UpdateButton(OrctionPostalOpenBtn)
     end
 end)
