@@ -981,12 +981,12 @@ local function Orction_BuildAHPanel()
     wlFrame:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 15, -75)
     wlFrame:SetFrameLevel(OrctionAHPanel:GetFrameLevel() + 15)
     wlFrame:SetBackdrop({
-        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
+        bgFile   = "Interface\\Buttons\\WHITE8X8",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile     = true, tileSize = 32, edgeSize = 12,
+        tile     = true, tileSize = 8, edgeSize = 12,
         insets   = { left = 3, right = 3, top = 3, bottom = 3 },
     })
-    wlFrame:SetBackdropColor(1, 1, 1, 1)
+    wlFrame:SetBackdropColor(0.06, 0.06, 0.1, 1)
     wlFrame:Hide()
 
     local wlTitle = wlFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
