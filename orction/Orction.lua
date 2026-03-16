@@ -706,9 +706,9 @@ local function Orction_BuildAHPanel()
 
     -- ── Search bar (top, full width) ──────────────────────────────────────────
     OrctionSearchBox = CreateFrame("EditBox", "OrctionSearchBox", OrctionAHPanel, "InputBoxTemplate")
-    OrctionSearchBox:SetWidth(600)
-    OrctionSearchBox:SetHeight(20)
-    OrctionSearchBox:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 60, -72)
+    OrctionSearchBox:SetWidth(100)
+    OrctionSearchBox:SetHeight(25)
+    OrctionSearchBox:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 76, -50)
     OrctionSearchBox:SetAutoFocus(false)
     OrctionSearchBox:SetMaxLetters(64)
     OrctionSearchBox:SetScript("OnEnterPressed", function()
@@ -779,12 +779,12 @@ local function Orction_BuildAHPanel()
     OrctionItemNameText = OrctionAHPanel:CreateFontString("OrctionItemNameText", "ARTWORK", "GameFontHighlight")
     OrctionItemNameText:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 68, -105)
     OrctionItemNameText:SetWidth(120)
-    OrctionItemNameText:SetText("< Drag an item here to post an Auction")
+    OrctionItemNameText:SetText("")
 
     -- Vendor Sell (below item slot)
     local vendorSellLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
-    vendorSellLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 27, -148)
-    vendorSellLabel:SetText("Vendor Sell:")
+    vendorSellLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 73, -138)
+    vendorSellLabel:SetText("Vendor Item:")
 
     OrctionVendorSellValue = OrctionAHPanel:CreateFontString("OrctionVendorSellValue", "ARTWORK", "GameFontHighlightSmall")
     OrctionVendorSellValue:SetPoint("LEFT", vendorSellLabel, "RIGHT", 4, 0)
@@ -793,28 +793,27 @@ local function Orction_BuildAHPanel()
     -- Duration is fixed at 24h — sync Blizzard's button so CalculateAuctionDeposit is accurate
     AuctionsMediumAuctionButton:SetChecked(true)
 
-    -- Count  ──────────────────────────────────────────────────────────────────
+    -- Count / Stacks on the same row  ─────────────────────────────────────────
     local countLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    countLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -225)
+    countLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -160)
     countLabel:SetText("Count")
+
+    local stacksLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    stacksLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 90, -160)
+    stacksLabel:SetText("Stacks")
 
     OrctionCountBox = CreateFrame("EditBox", "OrctionCountBox", OrctionAHPanel, "InputBoxTemplate")
     OrctionCountBox:SetWidth(40)
     OrctionCountBox:SetHeight(18)
-    OrctionCountBox:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -240)
+    OrctionCountBox:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -175)
     OrctionCountBox:SetMaxLetters(4)
     OrctionCountBox:SetAutoFocus(false)
     OrctionCountBox:SetText("1")
 
-    -- Stacks  ─────────────────────────────────────────────────────────────────
-    local stacksLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    stacksLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -263)
-    stacksLabel:SetText("Stacks")
-
     OrctionStacksBox = CreateFrame("EditBox", "OrctionStacksBox", OrctionAHPanel, "InputBoxTemplate")
     OrctionStacksBox:SetWidth(40)
     OrctionStacksBox:SetHeight(18)
-    OrctionStacksBox:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -278)
+    OrctionStacksBox:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 90, -175)
     OrctionStacksBox:SetMaxLetters(3)
     OrctionStacksBox:SetAutoFocus(false)
     OrctionStacksBox:SetText("1")
@@ -832,16 +831,16 @@ local function Orction_BuildAHPanel()
 
     -- Buyout Price  ────────────────────────────────────────────────────────────
     local buyoutLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    buyoutLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 33, -305)
+    buyoutLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 33, -200)
     buyoutLabel:SetText("Buyout Price")
 
     OrctionBuyout = CreateFrame("Frame", "OrctionBuyout", OrctionAHPanel, "MoneyInputFrameTemplate")
-    OrctionBuyout:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 33, -320)
+    OrctionBuyout:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 33, -215)
     ResizeMoneyInputFrame("OrctionBuyout")
 
     -- Deposit  ────────────────────────────────────────────────────────────────
     local depositLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    depositLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 30, -353)
+    depositLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 30, -240)
     depositLabel:SetText("Deposit:")
 
     OrctionDepositValue = OrctionAHPanel:CreateFontString("OrctionDepositValue", "ARTWORK", "GameFontHighlightSmall")
@@ -852,7 +851,7 @@ local function Orction_BuildAHPanel()
     OrctionCreateBtn = CreateFrame("Button", "OrctionCreateBtn", OrctionAHPanel, "UIPanelButtonTemplate")
     OrctionCreateBtn:SetWidth(191)
     OrctionCreateBtn:SetHeight(20)
-    OrctionCreateBtn:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 18, -378)
+    OrctionCreateBtn:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 18, -260)
     OrctionCreateBtn:SetText("Create Auction")
     OrctionCreateBtn:SetScript("OnClick", Orction_CreateAuction)
 

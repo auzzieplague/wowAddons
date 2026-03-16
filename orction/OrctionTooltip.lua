@@ -34,3 +34,23 @@ ContainerFrameItemButton_OnEnter = function()
     orig_ContainerFrameItemButton_OnEnter()
     OrctionTooltip_AddVendorPrice()
 end
+
+-- Mail attachments (postal / inbox)
+if InboxFrameItemButton_OnEnter then
+    local orig_InboxFrameItemButton_OnEnter = InboxFrameItemButton_OnEnter
+    InboxFrameItemButton_OnEnter = function(...)
+        local ret = orig_InboxFrameItemButton_OnEnter(unpack(arg))
+        OrctionTooltip_AddVendorPrice()
+        return ret
+    end
+end
+
+-- Auction House item tooltips (browse/bid/auction tabs)
+if AuctionFrameItem_OnEnter then
+    local orig_AuctionFrameItem_OnEnter = AuctionFrameItem_OnEnter
+    AuctionFrameItem_OnEnter = function(...)
+        local ret = orig_AuctionFrameItem_OnEnter(unpack(arg))
+        OrctionTooltip_AddVendorPrice()
+        return ret
+    end
+end
