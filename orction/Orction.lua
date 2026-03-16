@@ -28,9 +28,18 @@ local orctionLastTooltipName = nil
 local orctionWatchlistRows   = {}
 local WL_ROW_H               = 16
 local WL_MAX_ROWS            = 13
-local orctionSimilarResults  = {}   -- all AH results regardless of name match
-local orctionShowingSimilar  = false -- true when showing similar after exact match found nothing
-local orctionVendorCache     = {}   -- name -> vendor copper, reset each search
+local orctionSimilarResults   = {}   -- all AH results regardless of name match
+local orctionShowingSimilar   = false -- true when showing similar after exact match found nothing
+local orctionVendorCache      = {}   -- name -> vendor copper, reset each search
+local orctionScanQueue         = nil  -- list of names to scan; nil when not scanning
+local orctionScanIndex         = 0    -- current position in scan queue
+local orctionScanMode          = false -- true while showing accumulated scan results
+local orctionScanNextPending   = false -- waiting for inter-item delay before next query
+local orctionScanNextDelay     = 0    -- seconds accumulated toward next scan item
+local orctionScanItemStartCount = 0   -- orctionSimilarResults count at start of current scan item
+local orctionQueryRetryCount   = 0    -- retries fired for the current query (rate-limit recovery)
+local ORCTION_RETRY_DELAY      = 0.5  -- seconds to wait before retrying an empty query (synced from DB)
+local ORCTION_MAX_RETRIES      = 2    -- maximum retries per query before giving up (synced from DB)
 
 -- ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -185,10 +194,13 @@ end
 local function Orction_DisplayResults()
     local exactMode = not (OrctionExactMatchCheck and OrctionExactMatchCheck:GetChecked() == nil)
 
-    -- Choose result set: exact match ON → prefer exact, fall back to similar
+    -- Choose result set
     local results
     orctionShowingSimilar = false
-    if exactMode then
+    if orctionScanMode then
+        -- Scan: show everything accumulated across all watchlist items
+        results = orctionSimilarResults
+    elseif exactMode then
         if table.getn(orctionSearchResults) > 0 then
             results = orctionSearchResults
         elseif table.getn(orctionSimilarResults) > 0 then
@@ -295,8 +307,9 @@ local function Orction_CollectPage()
     end
 
     if orctionPageProcessed then return end  -- ignore duplicate non-empty firings for this page
-    orctionPageProcessed = true
-    orctionWaitTimeout   = 0  -- got real data, reset the timeout
+    orctionPageProcessed   = true
+    orctionWaitTimeout     = 0  -- got real data, reset the timeout
+    orctionQueryRetryCount = 0  -- successful response, clear retry counter
     Orction_UpdateSearchingText()
     for i = 1, batch do
         local name, texture, count, quality, canUse, level,
@@ -356,11 +369,24 @@ local function Orction_CollectPage()
         orctionQueryDelay  = 0
     else
         orctionSearchActive = false
-        Orction_DisplayResults()
+        if orctionScanMode then
+            local found = table.getn(orctionSimilarResults) - orctionScanItemStartCount
+            DEFAULT_CHAT_FRAME:AddMessage(
+                "Orction: " .. (orctionSearchName or "?") .. " — " .. found .. " results")
+            orctionScanNextPending = true
+            orctionScanNextDelay   = 0
+        else
+            Orction_DisplayResults()
+        end
     end
 end
 
 local function Orction_StartSearch(name)
+    -- Cancel any active scan
+    orctionScanMode          = false
+    orctionScanQueue         = nil
+    orctionScanNextPending   = false
+    orctionQueryRetryCount   = 0
     orctionSearchName    = name
     orctionSearchPage    = 0
     orctionSearchActive  = true
@@ -505,8 +531,14 @@ end
 
 -- Called when the user drops an item onto the slot.
 local function Orction_OnItemDrop()
+    local hadSellItem = GetAuctionSellItemInfo() and true or false
     ClickAuctionSellItemButton()  -- cursor → sell slot
     local name, texture, count = GetAuctionSellItemInfo()
+    if hadSellItem then
+        orctionPendingSellRead = true
+        orctionSellPollElapsed = 0
+        return
+    end
     if not name then
         orctionPendingSellRead = true
         orctionSellPollElapsed = 0
@@ -847,6 +879,125 @@ local function Orction_RemoveFromWatchlist(idx)
     Orction_RefreshWatchlist()
 end
 
+-- ── Scan helpers ──────────────────────────────────────────────────────────
+
+local function Orction_ScanNext()
+    if not orctionScanQueue then return end
+    orctionScanIndex = orctionScanIndex + 1
+    local total = table.getn(orctionScanQueue)
+    if orctionScanIndex > total then
+        -- All items scanned — display accumulated results
+        if OrctionSearchingText then OrctionSearchingText:Hide() end
+        Orction_DisplayResults()
+        orctionScanMode  = false
+        orctionScanQueue = nil
+        DEFAULT_CHAT_FRAME:AddMessage(
+            "Orction: scan complete — " .. table.getn(orctionSimilarResults) .. " results")
+        return
+    end
+    local name = orctionScanQueue[orctionScanIndex]
+    orctionSearchName        = name
+    orctionSearchPage        = 0
+    orctionSearchActive      = true
+    orctionPageProcessed     = false
+    orctionSearchRetry       = false
+    orctionQueryDelay        = 0
+    orctionWaitTimeout       = 0
+    orctionQueryRetryCount   = 0
+    orctionScanItemStartCount = table.getn(orctionSimilarResults)
+    if OrctionSearchingText then
+        OrctionSearchingText:SetText(
+            "Scanning " .. orctionScanIndex .. "/" .. total .. ": " .. name)
+        OrctionSearchingText:Show()
+    end
+    QueryAuctionItems(name, nil, nil, nil, nil, nil, 0, nil, nil)
+end
+
+local function Orction_StartScan()
+    local list = Orction_GetWatchlist()
+    if table.getn(list) == 0 then
+        DEFAULT_CHAT_FRAME:AddMessage("Orction: watchlist is empty")
+        return
+    end
+    orctionSearchResults  = {}
+    orctionSimilarResults = {}
+    orctionVendorCache    = {}
+    orctionScanMode       = true
+    orctionScanQueue      = list
+    orctionScanIndex      = 0
+    for i = 1, table.getn(orctionResultRows) do
+        orctionResultRows[i].frame:Hide()
+    end
+    if OrctionNoResultsText      then OrctionNoResultsText:Hide()      end
+    if OrctionSimilarResultsText then OrctionSimilarResultsText:Hide() end
+    Orction_ScanNext()
+end
+
+-- ── OnUpdate handler (module-level to avoid adding upvalues to BuildAHPanel) ──
+
+local function Orction_AHPanel_OnUpdate()
+    if orctionPendingSellRead then
+        orctionSellPollElapsed = orctionSellPollElapsed + arg1
+        local name, texture, count = GetAuctionSellItemInfo()
+        if name then
+            orctionPendingSellRead = false
+            orctionSellPollElapsed = 0
+            Orction_HandleSellSlotItem(name, texture, count)
+        elseif orctionSellPollElapsed >= 1.0 then
+            orctionPendingSellRead = false
+            orctionSellPollElapsed = 0
+            DEFAULT_CHAT_FRAME:AddMessage("Orction: sell slot read timed out")
+        end
+    end
+    if orctionScanNextPending then
+        orctionScanNextDelay = orctionScanNextDelay + arg1
+        if orctionScanNextDelay >= 0.5 then
+            orctionScanNextPending = false
+            orctionScanNextDelay   = 0
+            Orction_ScanNext()
+        end
+    elseif orctionSearchRetry then
+        orctionQueryDelay = orctionQueryDelay + arg1
+        -- Rate-limit retries use ORCTION_RETRY_DELAY; page pagination uses 0.3s
+        local threshold = (orctionQueryRetryCount > 0) and ORCTION_RETRY_DELAY or 0.3
+        if orctionQueryDelay >= threshold then
+            orctionSearchRetry   = false
+            orctionPageProcessed = false
+            orctionWaitTimeout   = 0
+            orctionQueryDelay    = 0
+            QueryAuctionItems(orctionSearchName, nil, nil, nil, nil, nil,
+                              orctionSearchPage, nil, nil)
+        end
+    elseif orctionSearchActive then
+        orctionWaitTimeout = orctionWaitTimeout + arg1
+        if orctionWaitTimeout >= 3.0 then
+            if orctionQueryRetryCount < ORCTION_MAX_RETRIES then
+                -- Rate-limit recovery: retry the same query after the configured delay
+                orctionQueryRetryCount = orctionQueryRetryCount + 1
+                orctionPageProcessed   = false
+                orctionWaitTimeout     = 0
+                DEFAULT_CHAT_FRAME:AddMessage(
+                    "Orction: no response for '" .. (orctionSearchName or "?") ..
+                    "', retrying (" .. orctionQueryRetryCount .. "/" .. ORCTION_MAX_RETRIES .. ")")
+                orctionSearchRetry = true   -- OnUpdate will re-fire QueryAuctionItems
+                orctionQueryDelay  = 0      -- rate-limit path uses ORCTION_RETRY_DELAY threshold
+            else
+                orctionSearchActive    = false
+                orctionQueryRetryCount = 0
+                if orctionScanMode then
+                    local found = table.getn(orctionSimilarResults) - orctionScanItemStartCount
+                    DEFAULT_CHAT_FRAME:AddMessage(
+                        "Orction: " .. (orctionSearchName or "?") .. " — timed out (" .. found .. " results)")
+                    orctionScanNextPending = true
+                    orctionScanNextDelay   = 0
+                else
+                    Orction_DisplayResults()
+                end
+            end
+        end
+    end
+end
+
 -- ── Build the AH panel ────────────────────────────────────────────────────
 
 local function Orction_BuildAHPanel()
@@ -1135,17 +1286,18 @@ local function Orction_BuildAHPanel()
     wlVendorBtn:SetPoint("BOTTOMLEFT", wlFrame, "BOTTOMLEFT", 6, 6)
     wlVendorBtn:SetText("Vendor")
 
-    local wlFirstBtn = CreateFrame("Button", nil, wlFrame, "UIPanelButtonTemplate")
-    wlFirstBtn:SetWidth(44)
-    wlFirstBtn:SetHeight(20)
-    wlFirstBtn:SetPoint("LEFT", wlVendorBtn, "RIGHT", 4, 0)
-    wlFirstBtn:SetText("First")
+    local wScanBtn = CreateFrame("Button", nil, wlFrame, "UIPanelButtonTemplate")
+    wScanBtn:SetWidth(44)
+    wScanBtn:SetHeight(20)
+    wScanBtn:SetPoint("LEFT", wlVendorBtn, "RIGHT", 4, 0)
+    wScanBtn:SetText("First")
 
     local wlFullBtn = CreateFrame("Button", nil, wlFrame, "UIPanelButtonTemplate")
     wlFullBtn:SetWidth(40)
     wlFullBtn:SetHeight(20)
-    wlFullBtn:SetPoint("LEFT", wlFirstBtn, "RIGHT", 4, 0)
-    wlFullBtn:SetText("Full")
+    wlFullBtn:SetPoint("LEFT", wScanBtn, "RIGHT", 4, 0)
+    wlFullBtn:SetText("Scan")
+    wlFullBtn:SetScript("OnClick", Orction_StartScan)
 
     -- ── Results table (right panel, scrollable) ────────────────────────────
     -- Right panel footprint from dump: x=219, y=76, w=576, h=37 per row
@@ -1312,40 +1464,7 @@ local function Orction_BuildAHPanel()
     end)
 
     -- Pace multi-page queries and time out if a page never returns data
-    OrctionAHPanel:SetScript("OnUpdate", function()
-        if orctionPendingSellRead then
-            orctionSellPollElapsed = orctionSellPollElapsed + arg1
-            local name, texture, count = GetAuctionSellItemInfo()
-            if name then
-                orctionPendingSellRead = false
-                orctionSellPollElapsed = 0
-                Orction_HandleSellSlotItem(name, texture, count)
-            elseif orctionSellPollElapsed >= 1.0 then
-                orctionPendingSellRead = false
-                orctionSellPollElapsed = 0
-                DEFAULT_CHAT_FRAME:AddMessage("Orction: sell slot read timed out")
-            end
-        end
-        if orctionSearchRetry then
-            orctionQueryDelay = orctionQueryDelay + arg1
-            if orctionQueryDelay >= 0.3 then
-                orctionSearchRetry   = false
-                orctionPageProcessed = false
-                orctionWaitTimeout   = 0
-                orctionQueryDelay    = 0
-                QueryAuctionItems(orctionSearchName, nil, nil, nil, nil, nil,
-                                  orctionSearchPage, nil, nil)
-            end
-        elseif orctionSearchActive then
-            -- Waiting for AUCTION_ITEM_LIST_UPDATE with non-zero batch.
-            -- If nothing arrives in 3 seconds, display whatever we collected so far.
-            orctionWaitTimeout = orctionWaitTimeout + arg1
-            if orctionWaitTimeout >= 3.0 then
-                orctionSearchActive = false
-                Orction_DisplayResults()
-            end
-        end
-    end)
+    OrctionAHPanel:SetScript("OnUpdate", Orction_AHPanel_OnUpdate)
 end
 
 

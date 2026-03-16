@@ -192,10 +192,67 @@ pagesValueText:SetText("3")
 pagesSlider:SetScript("OnValueChanged", function()
     local val = math.floor(this:GetValue() + 0.5)
     pagesValueText:SetText(tostring(val))
-    -- Sync to global used by Orction.lua
     ORCTION_MAX_PAGES = val
     if OrctionDB and OrctionDB.settings then
         OrctionDB.settings.maxPages = val
+    end
+end)
+
+-- "Retry Delay" label
+local retryDelayLabel = auctionPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+retryDelayLabel:SetPoint("TOPLEFT", pagesSlider, "BOTTOMLEFT", 0, -16)
+retryDelayLabel:SetText("Retry Delay (ms)")
+
+-- Retry delay slider (200–2000 ms, step 100)
+local retryDelaySlider = CreateFrame("Slider", "OrctionRetryDelaySlider", auctionPanel, "OptionsSliderTemplate")
+retryDelaySlider:SetWidth(200)
+retryDelaySlider:SetPoint("TOPLEFT", retryDelayLabel, "BOTTOMLEFT", 0, -6)
+retryDelaySlider:SetMinMaxValues(200, 2000)
+retryDelaySlider:SetValueStep(100)
+retryDelaySlider:SetValue(500)
+
+getglobal("OrctionRetryDelaySliderLow"):SetText("200")
+getglobal("OrctionRetryDelaySliderHigh"):SetText("2000")
+
+local retryDelayValueText = auctionPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+retryDelayValueText:SetPoint("LEFT", retryDelaySlider, "RIGHT", 10, 0)
+retryDelayValueText:SetText("500")
+
+retryDelaySlider:SetScript("OnValueChanged", function()
+    local val = math.floor(this:GetValue() / 100 + 0.5) * 100
+    retryDelayValueText:SetText(tostring(val))
+    ORCTION_RETRY_DELAY = val / 1000
+    if OrctionDB and OrctionDB.settings then
+        OrctionDB.settings.retryDelay = val
+    end
+end)
+
+-- "Max Retries" label
+local maxRetriesLabel = auctionPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+maxRetriesLabel:SetPoint("TOPLEFT", retryDelaySlider, "BOTTOMLEFT", 0, -16)
+maxRetriesLabel:SetText("Max Retries")
+
+-- Max retries slider (0–5, step 1)
+local maxRetriesSlider = CreateFrame("Slider", "OrctionMaxRetriesSlider", auctionPanel, "OptionsSliderTemplate")
+maxRetriesSlider:SetWidth(200)
+maxRetriesSlider:SetPoint("TOPLEFT", maxRetriesLabel, "BOTTOMLEFT", 0, -6)
+maxRetriesSlider:SetMinMaxValues(0, 5)
+maxRetriesSlider:SetValueStep(1)
+maxRetriesSlider:SetValue(2)
+
+getglobal("OrctionMaxRetriesSliderLow"):SetText("0")
+getglobal("OrctionMaxRetriesSliderHigh"):SetText("5")
+
+local maxRetriesValueText = auctionPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+maxRetriesValueText:SetPoint("LEFT", maxRetriesSlider, "RIGHT", 10, 0)
+maxRetriesValueText:SetText("2")
+
+maxRetriesSlider:SetScript("OnValueChanged", function()
+    local val = math.floor(this:GetValue() + 0.5)
+    maxRetriesValueText:SetText(tostring(val))
+    ORCTION_MAX_RETRIES = val
+    if OrctionDB and OrctionDB.settings then
+        OrctionDB.settings.maxRetries = val
     end
 end)
 
@@ -290,6 +347,14 @@ local function OrctionSettings_ApplyToUI()
     local pages = s.maxPages or 3
     pagesSlider:SetValue(pages)
     pagesValueText:SetText(tostring(pages))
+
+    local rd = s.retryDelay or 500
+    retryDelaySlider:SetValue(rd)
+    retryDelayValueText:SetText(tostring(rd))
+
+    local mr = s.maxRetries or 2
+    maxRetriesSlider:SetValue(mr)
+    maxRetriesValueText:SetText(tostring(mr))
 end
 
 OrctionFrame:SetScript("OnShow", function()
@@ -320,6 +385,8 @@ settingsEventFrame:SetScript("OnEvent", function()
         if s.titleCaseSearch  == nil then s.titleCaseSearch  = true  end
         if s.maxPages         == nil then s.maxPages         = 3     end
         if s.exactMatch       == nil then s.exactMatch       = true  end
+        if s.retryDelay       == nil then s.retryDelay       = 500   end
+        if s.maxRetries       == nil then s.maxRetries       = 2     end
 
         -- Sync exact match checkbox
         if OrctionExactMatchCheck then
@@ -327,8 +394,10 @@ settingsEventFrame:SetScript("OnEvent", function()
             else                 OrctionExactMatchCheck:SetChecked(nil) end
         end
 
-        -- Sync global used by Orction.lua search logic
-        ORCTION_MAX_PAGES = s.maxPages
+        -- Sync globals used by Orction.lua search logic
+        ORCTION_MAX_PAGES   = s.maxPages
+        ORCTION_RETRY_DELAY = s.retryDelay / 1000
+        ORCTION_MAX_RETRIES = s.maxRetries
 
         -- Ensure persistent tables exist
         if not OrctionDB.vendorPrices then OrctionDB.vendorPrices = {} end
