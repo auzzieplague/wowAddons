@@ -400,7 +400,6 @@ local function OrctionSettings_RefreshData()
     if dataPage < 1 then dataPage = 1 end
 
     local startIdx = (dataPage - 1) * dataPageSize + 1
-    local slot = OrctionSettings_GetDaySlot()
 
     for i = 1, dataPageSize do
         local row = dataRows[i]
@@ -408,12 +407,27 @@ local function OrctionSettings_RefreshData()
         if row and idx <= total then
             local key = keys[idx]
             local entry = OrctionDB.priceHistory[key]
-            local pKey = "day" .. slot .. "Price"
-            local cKey = "day" .. slot .. "Count"
             row.name:SetText(entry.name or "")
-            row.key:SetText(key)
-            row.price:SetText(tostring(entry[pKey] or 0))
-            row.count:SetText(tostring(entry[cKey] or 0))
+            local weeklySum = 0
+            for d = 1, 7 do
+                local pKey = "day" .. d .. "Price"
+                local cKey = "day" .. d .. "Count"
+                local cVal = entry[cKey] or 0
+                local pVal = entry[pKey] or 0
+                if row.dayCells and row.dayCells[d] then
+                    if cVal > 0 then
+                        row.dayCells[d]:SetText(tostring(cVal))
+                    else
+                        row.dayCells[d]:SetText("-")
+                    end
+                end
+                if cVal > 0 and pVal > 0 then
+                    weeklySum = weeklySum + (cVal * pVal)
+                end
+            end
+            if row.value then
+                row.value:SetText(tostring(math.floor(weeklySum / 7)))
+            end
             row.frame:Show()
         elseif row then
             row.frame:Hide()
@@ -426,7 +440,7 @@ local function OrctionSettings_RefreshData()
 end
 
 local dataSearchBox = CreateFrame("EditBox", "OrctionDataSearchBox", dataPanel, "InputBoxTemplate")
-dataSearchBox:SetWidth(180)
+dataSearchBox:SetWidth(80)
 dataSearchBox:SetHeight(22)
 dataSearchBox:SetPoint("TOPLEFT", dataPanel, "TOPLEFT", 10, -10)
 dataSearchBox:SetAutoFocus(false)
@@ -451,7 +465,6 @@ end)
 local purgeBtn = CreateFrame("Button", nil, dataPanel, "UIPanelButtonTemplate")
 purgeBtn:SetWidth(90)
 purgeBtn:SetHeight(22)
-purgeBtn:SetPoint("LEFT", dataSearchBtn, "RIGHT", 6, 0)
 purgeBtn:SetText("Purge Data")
 purgeBtn:SetScript("OnClick", function()
     if OrctionDB then OrctionDB.priceHistory = {} end
@@ -461,7 +474,6 @@ end)
 local analyzeBtn = CreateFrame("Button", nil, dataPanel, "UIPanelButtonTemplate")
 analyzeBtn:SetWidth(90)
 analyzeBtn:SetHeight(22)
-analyzeBtn:SetPoint("LEFT", purgeBtn, "RIGHT", 6, 0)
 analyzeBtn:SetText("Analyze")
 analyzeBtn:SetScript("OnClick", function()
     DEFAULT_CHAT_FRAME:AddMessage("Orction: analyze data not implemented")
@@ -471,17 +483,21 @@ local headerName = dataPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSma
 headerName:SetPoint("TOPLEFT", dataPanel, "TOPLEFT", 10, -42)
 headerName:SetText("Name")
 
-local headerKey = dataPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-headerKey:SetPoint("LEFT", headerName, "RIGHT", 160, 0)
-headerKey:SetText("Key")
+local dayHeaders = {}
+for i = 1, 7 do
+    local h = dataPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    if i == 1 then
+        h:SetPoint("LEFT", headerName, "RIGHT", 100, 0)
+    else
+        h:SetPoint("LEFT", dayHeaders[i - 1], "RIGHT", 20, 0)
+    end
+    h:SetText(tostring(i))
+    dayHeaders[i] = h
+end
 
-local headerPrice = dataPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-headerPrice:SetPoint("LEFT", headerKey, "RIGHT", 140, 0)
-headerPrice:SetText("Day Price")
-
-local headerCount = dataPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-headerCount:SetPoint("LEFT", headerPrice, "RIGHT", 60, 0)
-headerCount:SetText("Count")
+local headerValue = dataPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+headerValue:SetPoint("LEFT", dayHeaders[7], "RIGHT", 20, 0)
+headerValue:SetText("Value")
 
 local rowsFrame = CreateFrame("Frame", nil, dataPanel)
 rowsFrame:SetWidth(480)
@@ -496,28 +512,30 @@ for i = 1, dataPageSize do
 
     local name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     name:SetPoint("LEFT", row, "LEFT", 0, 0)
-    name:SetWidth(150)
+    name:SetWidth(100)
     name:SetJustifyH("LEFT")
 
-    local key = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    key:SetPoint("LEFT", name, "RIGHT", 10, 0)
-    key:SetWidth(130)
-    key:SetJustifyH("LEFT")
+    local dayCells = {}
+    for d = 1, 7 do
+        local cell = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        if d == 1 then
+            cell:SetPoint("LEFT", name, "RIGHT", 10, 0)
+        else
+            cell:SetPoint("LEFT", dayCells[d - 1], "RIGHT", 12, 0)
+        end
+        cell:SetWidth(20)
+        cell:SetJustifyH("RIGHT")
+        dayCells[d] = cell
+    end
 
-    local price = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    price:SetPoint("LEFT", key, "RIGHT", 10, 0)
-    price:SetWidth(60)
-    price:SetJustifyH("RIGHT")
-
-    local count = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    count:SetPoint("LEFT", price, "RIGHT", 10, 0)
-    count:SetWidth(40)
-    count:SetJustifyH("RIGHT")
+    local value = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    value:SetPoint("LEFT", dayCells[7], "RIGHT", 8, 0)
+    value:SetWidth(40)
+    value:SetJustifyH("RIGHT")
 
     row.name = name
-    row.key = key
-    row.price = price
-    row.count = count
+    row.dayCells = dayCells
+    row.value = value
     row.frame = row
     row:Hide()
     dataRows[i] = row
@@ -546,6 +564,8 @@ end)
 OrctionDataPageText = dataPanel:CreateFontString("OrctionDataPageText", "OVERLAY", "GameFontHighlightSmall")
 OrctionDataPageText:SetPoint("LEFT", nextBtn, "RIGHT", 10, 0)
 OrctionDataPageText:SetText("Page 1 / 1")
+purgeBtn:SetPoint("BOTTOMRIGHT", OrctionFrame, "BOTTOMRIGHT", -110, 12)
+analyzeBtn:SetPoint("LEFT", purgeBtn, "RIGHT", 6, 0)
 
 -------------------------------------------------------------------------------
 -- TAB 5: Credits

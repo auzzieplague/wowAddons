@@ -63,6 +63,29 @@ local function CopperToString(copper)
     return g .. "g " .. s .. "s " .. c .. "c"
 end
 
+-- Colourised money string.
+-- With gold: show Xg [Ys], omit copper.
+-- Without gold: show [Ys] [Zc], omit zero-value parts.
+local function FormatMoneyColour(copper)
+    if not copper or copper <= 0 then
+        return "|cFFB87333" .. "0 |r"
+    end
+    local g = math.floor(copper / 10000)
+    local s = math.floor(math.mod(copper, 10000) / 100)
+    local c = math.mod(copper, 100)
+    if g > 0 then
+        local str = "|cFFFFD700" .. g .. "g |r"
+        if s > 0 then str = str .. "|cFFC0C0C0" .. s .. " |r" end
+        return str
+    elseif s > 0 then
+        local str = "|cFFC0C0C0" .. s .. " |r"
+        if c > 0 then str = str .. "|cFFB87333" .. c .. " |r" end
+        return str
+    else
+        return "|cFFB87333" .. c .. " |r"
+    end
+end
+
 local function Orction_TitleCaseWords(text)
     if not text then return text end
     return string.gsub(text, "(%a)([%w']*)", function(a, b)
@@ -424,6 +447,14 @@ local function Orction_DisplayResults()
     local scroll = getglobal("OrctionResultScroll")
     if scroll then scroll:SetVerticalScroll(0) end
 
+    -- Pre-size the scroll child to exactly fit the visible rows so the scrollbar
+    -- range matches the actual content rather than always being MAX_ROWS tall.
+    local visibleCount = table.getn(groups)
+    if OrctionResultScrollChild and visibleCount > 0 then
+        local ROW_H = 37
+        OrctionResultScrollChild:SetHeight(visibleCount * ROW_H)
+    end
+
     for i = 1, table.getn(orctionResultRows) do
         local row = orctionResultRows[i]
         local g   = groups[i]
@@ -439,14 +470,14 @@ local function Orction_DisplayResults()
                 if g.texture then row.iconTex:SetTexture(g.texture) ; row.iconTex:Show()
                 else               row.iconTex:Hide() end
             end
+            local btnLabel = "|cFFFFFFFF" .. tostring(g.firstCount) .. " for |r" .. FormatMoneyColour(g.costPerItem * g.firstCount)
             if g.vendorPrice and g.vendorPrice > 0 and g.costPerItem < g.vendorPrice then
                 row.bg:SetTexture(0, 0.35, 0, 0.55)
-                row.buyBtn:SetText("Snatch " .. tostring(g.firstCount))
             else
                 if row.isEven then row.bg:SetTexture(0.09, 0.09, 0.19, 0.5)
                 else                row.bg:SetTexture(0, 0, 0.09, 0.3) end
-                row.buyBtn:SetText("Buy " .. tostring(g.firstCount))
             end
+            row.buyBtn:SetText(btnLabel)
             row.frame:Show()
         else
             row.costPerItem = nil
@@ -1648,6 +1679,10 @@ local function Orction_BuildAHPanel()
     hAuc:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 219 + COL3_X, HEADER_Y)
     hAuc:SetText("Auctions")
 
+    local hBuy = OrctionAHPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    hBuy:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 219 + COL4_X, HEADER_Y)
+    hBuy:SetText("Buy")
+
     local scrollFrame = CreateFrame("ScrollFrame", "OrctionResultScroll", OrctionAHPanel,
                                     "UIPanelScrollFrameTemplate")
     scrollFrame:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 219, -94)
@@ -1705,6 +1740,11 @@ local function Orction_BuildAHPanel()
         buyBtn:SetHeight(22)
         buyBtn:SetPoint("LEFT", rowBtn, "LEFT", COL4_X, 0)
         buyBtn:SetText("Buy")
+        local buyBtnFS = buyBtn:GetFontString()
+        if buyBtnFS then
+            local fontFile, _, flags = buyBtnFS:GetFont()
+            buyBtnFS:SetFont(fontFile or STANDARD_TEXT_FONT, 9, flags or "")
+        end
         buyBtn:SetScript("OnClick", function()
             local row = orctionResultRows[idx]
             if row and row.firstBuyout and row.itemName then
