@@ -319,6 +319,13 @@ settingsEventFrame:SetScript("OnEvent", function()
         if s.tooltipEnabled   == nil then s.tooltipEnabled   = true  end
         if s.titleCaseSearch  == nil then s.titleCaseSearch  = true  end
         if s.maxPages         == nil then s.maxPages         = 3     end
+        if s.exactMatch       == nil then s.exactMatch       = true  end
+
+        -- Sync exact match checkbox
+        if OrctionExactMatchCheck then
+            if s.exactMatch then OrctionExactMatchCheck:SetChecked(1)
+            else                 OrctionExactMatchCheck:SetChecked(nil) end
+        end
 
         -- Sync global used by Orction.lua search logic
         ORCTION_MAX_PAGES = s.maxPages

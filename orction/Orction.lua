@@ -27,6 +27,8 @@ local orctionLastTooltipName = nil
 local orctionWatchlistRows   = {}
 local WL_ROW_H               = 16
 local WL_MAX_ROWS            = 13
+local orctionSimilarResults  = {}   -- all AH results regardless of name match
+local orctionShowingSimilar  = false -- true when showing similar after exact match found nothing
 
 -- ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -179,13 +181,36 @@ end
 -- ── Search logic ──────────────────────────────────────────────────────────
 
 local function Orction_DisplayResults()
+    local exactMode = not (OrctionExactMatchCheck and OrctionExactMatchCheck:GetChecked() == nil)
+
+    -- Choose result set: exact match ON → prefer exact, fall back to similar
+    local results
+    orctionShowingSimilar = false
+    if exactMode then
+        if table.getn(orctionSearchResults) > 0 then
+            results = orctionSearchResults
+        elseif table.getn(orctionSimilarResults) > 0 then
+            results = orctionSimilarResults
+            orctionShowingSimilar = true
+        else
+            results = {}
+        end
+    else
+        results = orctionSimilarResults
+    end
+
+    -- Group by (name, costPerItem)
     local groups   = {}
     local groupMap = {}
-    for _, item in ipairs(orctionSearchResults) do
-        local k = item.costPerItem
+    for _, item in ipairs(results) do
+        local k = (item.name or "") .. "::" .. item.costPerItem
         if not groupMap[k] then
-            groupMap[k] = { costPerItem = k, totalCount = 0, numAuctions = 0,
-                            firstBuyout = item.buyout, firstCount = item.count }
+            groupMap[k] = { name        = item.name,
+                            texture     = item.texture,
+                            costPerItem = item.costPerItem,
+                            totalCount  = 0, numAuctions = 0,
+                            firstBuyout = item.buyout,
+                            firstCount  = item.count }
             table.insert(groups, groupMap[k])
         end
         groupMap[k].totalCount  = groupMap[k].totalCount  + item.count
@@ -195,12 +220,16 @@ local function Orction_DisplayResults()
 
     if OrctionSearchingText then OrctionSearchingText:Hide() end
 
+    if OrctionSimilarResultsText then
+        if orctionShowingSimilar then OrctionSimilarResultsText:Show()
+        else                          OrctionSimilarResultsText:Hide() end
+    end
+
     local hasResults = table.getn(groups) > 0
     if OrctionNoResultsText then
         if hasResults then OrctionNoResultsText:Hide() else OrctionNoResultsText:Show() end
     end
 
-    -- Update vendor sell display
     if OrctionVendorSellValue then
         if orctionVendorPrice and orctionVendorPrice > 0 then
             OrctionVendorSellValue:SetText(CopperToString(orctionVendorPrice))
@@ -209,14 +238,12 @@ local function Orction_DisplayResults()
         end
     end
 
-    -- Auto-set prices from the cheapest listing
-    if hasResults and OrctionCountBox then
+    -- Auto-set buyout from cheapest exact result only
+    if hasResults and not orctionShowingSimilar and OrctionCountBox then
         local count = math.max(1, tonumber(OrctionCountBox:GetText()) or 1)
-        local price = groups[1].costPerItem * count
-        MoneyInputFrame_SetCopper(OrctionBuyout, price)
+        MoneyInputFrame_SetCopper(OrctionBuyout, groups[1].costPerItem * count)
     end
 
-    -- Reset scroll to top
     local scroll = getglobal("OrctionResultScroll")
     if scroll then scroll:SetVerticalScroll(0) end
 
@@ -226,24 +253,28 @@ local function Orction_DisplayResults()
         if g then
             row.costPerItem = g.costPerItem
             row.firstBuyout = g.firstBuyout
+            row.itemName    = g.name
             row.cost:SetText(CopperToString(g.costPerItem))
             row.qty:SetText(tostring(g.totalCount))
             row.auctions:SetText(tostring(g.numAuctions))
+            if row.nameFS  then row.nameFS:SetText(g.name or "") end
+            if row.iconTex then
+                if g.texture then row.iconTex:SetTexture(g.texture) ; row.iconTex:Show()
+                else               row.iconTex:Hide() end
+            end
             if orctionVendorPrice and orctionVendorPrice > 0 and g.costPerItem < orctionVendorPrice then
                 row.bg:SetTexture(0, 0.35, 0, 0.55)
                 row.buyBtn:SetText("Snatch " .. tostring(g.firstCount))
             else
-                if row.isEven then
-                    row.bg:SetTexture(0.09, 0.09, 0.19, 0.5)
-                else
-                    row.bg:SetTexture(0, 0, 0.09, 0.3)
-                end
+                if row.isEven then row.bg:SetTexture(0.09, 0.09, 0.19, 0.5)
+                else                row.bg:SetTexture(0, 0, 0.09, 0.3) end
                 row.buyBtn:SetText("Buy " .. tostring(g.firstCount))
             end
             row.frame:Show()
         else
             row.costPerItem = nil
             row.firstBuyout = nil
+            row.itemName    = nil
             row.frame:Hide()
         end
     end
@@ -267,29 +298,37 @@ local function Orction_CollectPage()
     for i = 1, batch do
         local name, texture, count, quality, canUse, level,
               minBid, minIncrement, buyoutPrice = GetAuctionItemInfo("list", i)
-        if name == orctionSearchName then
-            -- Try to resolve vendor price from the first matching AH row
-            if (not orctionVendorPrice or orctionVendorPrice == 0) and SellValues then
-                local link = GetAuctionItemLink("list", i)
-                if link then
-                    local _, _, itemID = string.find(link, "item:(%d+)")
-                    if itemID then
-                        local price = SellValues["item:" .. itemID]
-                        if price and price > 0 then
-                            orctionVendorPrice = price
-                            if OrctionDB and OrctionDB.vendorPrices then
-                                OrctionDB.vendorPrices[name] = price
-                            end
+
+        -- Resolve vendor price from first exact match
+        if name == orctionSearchName and (not orctionVendorPrice or orctionVendorPrice == 0) and SellValues then
+            local link = GetAuctionItemLink("list", i)
+            if link then
+                local _, _, itemID = string.find(link, "item:(%d+)")
+                if itemID then
+                    local price = SellValues["item:" .. itemID]
+                    if price and price > 0 then
+                        orctionVendorPrice = price
+                        if OrctionDB and OrctionDB.vendorPrices then
+                            OrctionDB.vendorPrices[name] = price
                         end
                     end
                 end
             end
-            if buyoutPrice and buyoutPrice > 0 and count and count > 0 then
-                table.insert(orctionSearchResults, {
-                    buyout      = buyoutPrice,
-                    count       = count,
-                    costPerItem = math.floor(buyoutPrice / count),
-                })
+        end
+
+        if buyoutPrice and buyoutPrice > 0 and count and count > 0 then
+            local entry = {
+                name        = name,
+                texture     = texture,
+                buyout      = buyoutPrice,
+                count       = count,
+                costPerItem = math.floor(buyoutPrice / count),
+            }
+            -- Always collect into similar (all results)
+            table.insert(orctionSimilarResults, entry)
+            -- Exact results only for name matches
+            if name == orctionSearchName then
+                table.insert(orctionSearchResults, entry)
             end
         end
     end
@@ -314,8 +353,11 @@ local function Orction_StartSearch(name)
     orctionQueryDelay    = 0
     orctionWaitTimeout   = 0
     orctionSearchResults = {}
+    orctionSimilarResults = {}
+    orctionShowingSimilar = false
     orctionVendorPrice   = (OrctionDB and OrctionDB.vendorPrices and OrctionDB.vendorPrices[name]) or 0
-    if OrctionVendorSellValue then OrctionVendorSellValue:SetText("--") end
+    if OrctionVendorSellValue   then OrctionVendorSellValue:SetText("--") end
+    if OrctionSimilarResultsText then OrctionSimilarResultsText:Hide() end
     for i = 1, table.getn(orctionResultRows) do
         orctionResultRows[i].frame:Hide()
     end
@@ -327,21 +369,25 @@ end
 
 local function Orction_TryBuy()
     if not orctionBuyPending then return end
+    local buyName    = orctionBuyPending.name or orctionSearchName
+    local buyBuyout  = orctionBuyPending.buyout
     local batch = GetNumAuctionItems("list")
     for i = 1, batch do
         local name, texture, count, quality, canUse, level,
               minBid, minIncrement, buyoutPrice = GetAuctionItemInfo("list", i)
-        if buyoutPrice == orctionBuyPending.buyout then
-            local boughtBuyout = buyoutPrice
+        if name == buyName and buyoutPrice == buyBuyout then
             PlaceAuctionBid("list", i, buyoutPrice)
             orctionBuyPending = nil
-            -- Remove the bought auction from local results and refresh the table
-            for j = 1, table.getn(orctionSearchResults) do
-                if orctionSearchResults[j].buyout == boughtBuyout then
-                    table.remove(orctionSearchResults, j)
-                    break
+            -- Remove the bought entry from both result sets
+            local function removeFirst(t)
+                for j = 1, table.getn(t) do
+                    if t[j].buyout == buyBuyout and (t[j].name or "") == (buyName or "") then
+                        table.remove(t, j) return
+                    end
                 end
             end
+            removeFirst(orctionSearchResults)
+            removeFirst(orctionSimilarResults)
             Orction_DisplayResults()
             return
         end
@@ -827,6 +873,16 @@ local function Orction_BuildAHPanel()
         end
     end)
 
+    OrctionExactMatchCheck = CreateFrame("CheckButton", "OrctionExactMatchCheck", OrctionAHPanel, "OptionsCheckButtonTemplate")
+    OrctionExactMatchCheck:SetPoint("LEFT", addWatchBtn, "RIGHT", 8, 0)
+    getglobal("OrctionExactMatchCheckText"):SetText("Exact")
+    OrctionExactMatchCheck:SetChecked(1)
+    OrctionExactMatchCheck:SetScript("OnClick", function()
+        if OrctionDB and OrctionDB.settings then
+            OrctionDB.settings.exactMatch = not (this:GetChecked() == nil)
+        end
+    end)
+
     -- ── Left panel: absolute positions cloned from AuctionFrameAuctions children ─
     -- All SetPoint anchors are relative to OrctionAHPanel TOPLEFT (= AuctionFrame TOPLEFT).
     -- x/y values match the dump output so elements land on the same background areas.
@@ -1076,14 +1132,20 @@ local function Orction_BuildAHPanel()
     -- Right panel footprint from dump: x=219, y=76, w=576, h=37 per row
     -- Column offsets are relative to the scroll child (x=0 = panel x=219)
 
-    local COL1_X   = 11    -- cost per item
-    local COL2_X   = 261   -- total available
-    local COL3_X   = 371   -- # auctions
-    local COL4_X   = 456   -- buy button x (left edge within row)
-    local HEADER_Y = -51
-    local ROW_H    = 37
-    local MAX_ROWS = 50
-    local ROW_W    = 578   -- 543 + 50
+    local COL_ICON_X = 6    -- item icon
+    local COL_NAME_X = 34   -- item name
+    local COL1_X     = 178  -- cost per item
+    local COL2_X     = 318  -- total available
+    local COL3_X     = 412  -- # auctions
+    local COL4_X     = 480  -- buy button x
+    local HEADER_Y   = -81
+    local ROW_H      = 37
+    local MAX_ROWS   = 50
+    local ROW_W      = 578
+
+    local hName = OrctionAHPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    hName:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 219 + COL_NAME_X, HEADER_Y)
+    hName:SetText("Item")
 
     local hCost = OrctionAHPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     hCost:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 219 + COL1_X, HEADER_Y)
@@ -1099,7 +1161,7 @@ local function Orction_BuildAHPanel()
 
     local scrollFrame = CreateFrame("ScrollFrame", "OrctionResultScroll", OrctionAHPanel,
                                     "UIPanelScrollFrameTemplate")
-    scrollFrame:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 219, -76)
+    scrollFrame:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 219, -94)
     scrollFrame:SetWidth(ROW_W)
     scrollFrame:SetHeight(316)   -- ~8.5 visible rows
 
@@ -1129,6 +1191,17 @@ local function Orction_BuildAHPanel()
         hl:SetTexture(0.3, 0.3, 0.6, 0.4)
         hl:SetAllPoints()
 
+        local iconTex = rowBtn:CreateTexture(nil, "ARTWORK")
+        iconTex:SetWidth(26)
+        iconTex:SetHeight(26)
+        iconTex:SetPoint("LEFT", rowBtn, "LEFT", COL_ICON_X, 0)
+        iconTex:Hide()
+
+        local nameFS = rowBtn:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+        nameFS:SetPoint("TOPLEFT", rowBtn, "TOPLEFT", COL_NAME_X, -13)
+        nameFS:SetWidth(138)
+        nameFS:SetJustifyH("LEFT")
+
         local costFS = rowBtn:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
         costFS:SetPoint("TOPLEFT", rowBtn, "TOPLEFT", COL1_X, -13)
 
@@ -1145,9 +1218,9 @@ local function Orction_BuildAHPanel()
         buyBtn:SetText("Buy")
         buyBtn:SetScript("OnClick", function()
             local row = orctionResultRows[idx]
-            if row and row.firstBuyout and orctionSearchName then
-                orctionBuyPending = { buyout = row.firstBuyout }
-                QueryAuctionItems(orctionSearchName, nil, nil, nil, nil, nil, 0, nil, nil)
+            if row and row.firstBuyout and row.itemName then
+                orctionBuyPending = { buyout = row.firstBuyout, name = row.itemName }
+                QueryAuctionItems(row.itemName, nil, nil, nil, nil, nil, 0, nil, nil)
             end
         end)
 
@@ -1175,8 +1248,9 @@ local function Orction_BuildAHPanel()
 
         orctionResultRows[i] = { frame = rowBtn, cost = costFS, qty = qtyFS,
                                   auctions = aucFS, buyBtn = buyBtn, bg = bg,
+                                  nameFS = nameFS, iconTex = iconTex,
                                   isEven = (math.mod(i, 2) == 0),
-                                  costPerItem = nil, firstBuyout = nil }
+                                  costPerItem = nil, firstBuyout = nil, itemName = nil }
         rowBtn:Hide()
     end
 
@@ -1190,6 +1264,11 @@ local function Orction_BuildAHPanel()
     OrctionNoResultsText:SetPoint("TOP", scrollChild, "TOP", 0, -60)
     OrctionNoResultsText:SetText("No items available for buyout.")
     OrctionNoResultsText:Hide()
+
+    OrctionSimilarResultsText = scrollChild:CreateFontString("OrctionSimilarResultsText", "OVERLAY", "GameFontHighlight")
+    OrctionSimilarResultsText:SetPoint("TOP", scrollChild, "TOP", 0, 10)
+    OrctionSimilarResultsText:SetText("|cFFFF9900No Exact Matches! Showing similar...|r")
+    OrctionSimilarResultsText:Hide()
 
     -- ── Listen for item slot and search result changes ─────────────────────
 
