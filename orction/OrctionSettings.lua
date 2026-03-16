@@ -145,12 +145,22 @@ auctionEnabledCheck:SetScript("OnClick", function()
     end
 end)
 
+local autoOpenTabCheck = CreateFrame("CheckButton", "OrctionAutoOpenTabCheck", auctionPanel, "OptionsCheckButtonTemplate")
+autoOpenTabCheck:SetPoint("TOPLEFT", auctionEnabledCheck, "BOTTOMLEFT", 0, -6)
+getglobal("OrctionAutoOpenTabCheckText"):SetText("Auto-open Orction tab when AH opens")
+
+autoOpenTabCheck:SetScript("OnClick", function()
+    if OrctionDB and OrctionDB.settings then
+        OrctionDB.settings.autoOpenTab = (this:GetChecked() == 1)
+    end
+end)
+
 -- Feature description box (read-only)
 local auctionDesc = CreateFrame("EditBox", nil, auctionPanel)
 auctionDesc:SetMultiLine(true)
 auctionDesc:SetWidth(460)
 auctionDesc:SetHeight(60)
-auctionDesc:SetPoint("TOPLEFT", auctionPanel, "TOPLEFT", 10, -45)
+auctionDesc:SetPoint("TOPLEFT", autoOpenTabCheck, "BOTTOMLEFT", 0, -10)
 auctionDesc:SetFontObject("GameFontHighlightSmall")
 auctionDesc:EnableMouse(false)
 auctionDesc:EnableKeyboard(false)
@@ -396,6 +406,7 @@ local function OrctionSettings_ApplyToUI()
 
     -- Checkboxes (SetChecked expects 1/nil in 1.12)
     if s.auctionEnabled   then OrctionAuctionEnabledCheck:SetChecked(1)   else OrctionAuctionEnabledCheck:SetChecked(nil)   end
+    if s.autoOpenTab      then OrctionAutoOpenTabCheck:SetChecked(1)      else OrctionAutoOpenTabCheck:SetChecked(nil)      end
     if s.postEnabled      then OrctionPostEnabledCheck:SetChecked(1)      else OrctionPostEnabledCheck:SetChecked(nil)      end
     if s.inventoryEnabled then OrctionInventoryEnabledCheck:SetChecked(1) else OrctionInventoryEnabledCheck:SetChecked(nil) end
     if s.tooltipEnabled   then OrctionTooltipEnabledCheck:SetChecked(1)  else OrctionTooltipEnabledCheck:SetChecked(nil)  end
@@ -445,6 +456,7 @@ settingsEventFrame:SetScript("OnEvent", function()
         end
         local s = OrctionDB.settings
         if s.auctionEnabled   == nil then s.auctionEnabled   = true  end
+        if s.autoOpenTab      == nil then s.autoOpenTab      = true  end
         if s.postEnabled      == nil then s.postEnabled      = true  end
         if s.inventoryEnabled == nil then s.inventoryEnabled = true  end
         if s.tooltipEnabled   == nil then s.tooltipEnabled   = true  end

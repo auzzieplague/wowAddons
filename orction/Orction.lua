@@ -340,11 +340,19 @@ local function Orction_DisplayResults()
         results = orctionSimilarResults
     end
 
-    -- Group by (name, costPerItem)
+    -- Decide grouping strategy:
+    --   multiple item types → one row per name (cheapest price, total count)
+    --   single item type    → one row per price tier (existing behaviour)
+    local firstName = results[1] and results[1].name or nil
+    local multiItem = false
+    for i = 2, table.getn(results) do
+        if results[i].name ~= firstName then multiItem = true ; break end
+    end
+
     local groups   = {}
     local groupMap = {}
     for _, item in ipairs(results) do
-        local k = (item.name or "") .. "::" .. item.costPerItem
+        local k = multiItem and (item.name or "") or ((item.name or "") .. "::" .. item.costPerItem)
         if not groupMap[k] then
             groupMap[k] = { name        = item.name,
                             texture     = item.texture,
@@ -357,6 +365,14 @@ local function Orction_DisplayResults()
         end
         groupMap[k].totalCount  = groupMap[k].totalCount  + item.count
         groupMap[k].numAuctions = groupMap[k].numAuctions + 1
+        -- Keep the cheapest price point for this name
+        if multiItem and item.costPerItem < groupMap[k].costPerItem then
+            groupMap[k].costPerItem = item.costPerItem
+            groupMap[k].firstBuyout = item.buyout
+            groupMap[k].firstCount  = item.count
+            groupMap[k].texture     = item.texture
+            groupMap[k].vendorPrice = item.vendorPrice or 0
+        end
     end
     table.sort(groups, function(a, b) return a.costPerItem < b.costPerItem end)
 
@@ -384,6 +400,21 @@ local function Orction_DisplayResults()
     if hasResults and not orctionShowingSimilar and OrctionCountBox then
         local count = math.max(1, tonumber(OrctionCountBox:GetText()) or 1)
         MoneyInputFrame_SetCopper(OrctionBuyout, groups[1].costPerItem * count)
+    end
+
+    -- Record cheapest per-item price for each item during scans
+    if orctionScanMode and OrctionData_RecordScanPrice then
+        local cheapest = {}
+        for _, item in ipairs(results) do
+            local k = item.itemId or ("name:" .. (item.name or ""))
+            local cur = cheapest[k]
+            if not cur or item.costPerItem < cur.costPerItem then
+                cheapest[k] = { itemId = item.itemId, name = item.name, costPerItem = item.costPerItem }
+            end
+        end
+        for _, v in pairs(cheapest) do
+            OrctionData_RecordScanPrice(v.itemId, v.name, v.costPerItem, 1)
+        end
     end
 
     local scroll = getglobal("OrctionResultScroll")
@@ -472,8 +503,15 @@ local function Orction_CollectPage()
         end
 
         if buyoutPrice and buyoutPrice > 0 and count and count > 0 then
+            local itemId = nil
+            local link = GetAuctionItemLink("list", i)
+            if link then
+                local _, _, id = string.find(link, "item:(%d+)")
+                if id then itemId = tonumber(id) end
+            end
             local entry = {
                 name        = name,
+                itemId      = itemId,
                 texture     = texture,
                 buyout      = buyoutPrice,
                 count       = count,
@@ -1805,5 +1843,8 @@ eventFrame:SetScript("OnEvent", function()
         end
     elseif event == "AUCTION_HOUSE_SHOW" then
         AuctionFrameAuctions:Hide()
+        if OrctionDB and OrctionDB.settings and OrctionDB.settings.autoOpenTab then
+            Orction_OnTabClick(ORCTION_TAB_INDEX)
+        end
     end
 end)
