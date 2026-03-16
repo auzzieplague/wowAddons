@@ -5,5 +5,7 @@
 ## Version: 0.1.0
 ## SavedVariables: OrctionDB
 
-Orction.lua
+Database.lua
 OrctionPostbox.lua
+OrctionVendor.lua
+Orction.lua

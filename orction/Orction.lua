@@ -18,6 +18,11 @@ local orctionQueryDelay      = 0     -- seconds accumulated since retry was flag
 local orctionWaitTimeout     = 0     -- seconds waiting for non-zero batch on current page
 local orctionPendingPost     = nil   -- { name, startBid, buyout, count, stacksLeft, totalStacks }
 local orctionPendingDrop     = nil   -- { name, texture, count } while confirm dialog is open
+local orctionVendorPrice     = nil   -- vendor sell price (copper) for the current search item
+local orctionSellName        = nil   -- name of the item currently in the sell slot (for Create Auction)
+local ORCTION_TOOLTIP_HOOKED = false
+local orctionLastTooltipLink = nil
+local orctionLastTooltipName = nil
 
 -- ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -35,6 +40,122 @@ local function CopperToString(copper)
     local s = math.floor(math.mod(copper, 10000) / 100)
     local c = math.mod(copper, 100)
     return g .. "g " .. s .. "s " .. c .. "c"
+end
+
+-- ── Vendor price cache (tooltip hook) ─────────────────────────────────────
+
+local function Orction_NameFromLink(link)
+    if not link then return nil end
+    return string.gsub(link, ".*%[(.-)%].*", "%1")
+end
+
+local function Orction_ReadTooltipMoney()
+    if GameTooltipMoneyFrame1 and GameTooltipMoneyFrame1.money then
+        return GameTooltipMoneyFrame1.money
+    end
+    if GameTooltip and GameTooltip.money then
+        return GameTooltip.money
+    end
+    return nil
+end
+
+local function Orction_CacheVendorPrice(link, name)
+    if not OrctionDB then return end
+    OrctionDB.vendorPrices = OrctionDB.vendorPrices or {}
+    local itemName = name or Orction_NameFromLink(link)
+    if not itemName then return end
+    local money = Orction_ReadTooltipMoney()
+    if money and money > 0 then
+        OrctionDB.vendorPrices[itemName] = money
+    end
+end
+
+local function Orction_HookTooltipMethod(methodName, getter)
+    local orig = GameTooltip[methodName]
+    if not orig then return end
+    GameTooltip[methodName] = function(...)
+        local args = arg
+        local ret = orig(unpack(args))
+        local link, name = getter(unpack(args))
+        if link or name then
+            orctionLastTooltipLink = link
+            orctionLastTooltipName = name
+        end
+        Orction_CacheVendorPrice(link, name)
+        return ret
+    end
+end
+
+local function Orction_HookVendorPriceTooltip()
+    if ORCTION_TOOLTIP_HOOKED then return end
+    ORCTION_TOOLTIP_HOOKED = true
+
+    local orig_SetTooltipMoney = SetTooltipMoney
+    SetTooltipMoney = function(frame, money)
+        if arg then
+            orig_SetTooltipMoney(frame, money, unpack(arg))
+        else
+            orig_SetTooltipMoney(frame, money)
+        end
+        if frame == GameTooltip and money and money > 0 then
+            Orction_CacheVendorPrice(orctionLastTooltipLink, orctionLastTooltipName)
+        end
+    end
+
+    Orction_HookTooltipMethod("SetBagItem", function(self, bag, slot)
+        if not bag or not slot then return nil end
+        return GetContainerItemLink(bag, slot), nil
+    end)
+
+    Orction_HookTooltipMethod("SetInventoryItem", function(self, unit, slot)
+        return GetInventoryItemLink(unit, slot), nil
+    end)
+
+    Orction_HookTooltipMethod("SetLootItem", function(self, slot)
+        return GetLootSlotLink(slot), nil
+    end)
+
+    Orction_HookTooltipMethod("SetQuestItem", function(self, qtype, index)
+        if GetQuestItemLink then
+            return GetQuestItemLink(qtype, index), nil
+        end
+        return nil
+    end)
+
+    Orction_HookTooltipMethod("SetMerchantItem", function(self, index)
+        if GetMerchantItemLink then
+            return GetMerchantItemLink(index), nil
+        end
+        return nil
+    end)
+
+    Orction_HookTooltipMethod("SetTradeSkillItem", function(self, index)
+        if GetTradeSkillItemLink then
+            return GetTradeSkillItemLink(index), nil
+        end
+        return nil
+    end)
+
+    Orction_HookTooltipMethod("SetTradePlayerItem", function(self, index)
+        if GetTradePlayerItemLink then
+            return GetTradePlayerItemLink(index), nil
+        end
+        return nil
+    end)
+
+    Orction_HookTooltipMethod("SetTradeTargetItem", function(self, index)
+        if GetTradeTargetItemLink then
+            return GetTradeTargetItemLink(index), nil
+        end
+        return nil
+    end)
+
+    Orction_HookTooltipMethod("SetAuctionItem", function(self, atype, index)
+        if GetAuctionItemLink then
+            return GetAuctionItemLink(atype, index), nil
+        end
+        return nil
+    end)
 end
 
 -- ── Search logic ──────────────────────────────────────────────────────────
@@ -61,6 +182,23 @@ local function Orction_DisplayResults()
         if hasResults then OrctionNoResultsText:Hide() else OrctionNoResultsText:Show() end
     end
 
+    -- Update vendor sell display
+    if OrctionVendorSellValue then
+        if orctionVendorPrice and orctionVendorPrice > 0 then
+            OrctionVendorSellValue:SetText(CopperToString(orctionVendorPrice))
+        else
+            OrctionVendorSellValue:SetText("--")
+        end
+    end
+
+    -- Auto-set prices from the cheapest listing
+    if hasResults and OrctionCountBox then
+        local count = math.max(1, tonumber(OrctionCountBox:GetText()) or 1)
+        local price = groups[1].costPerItem * count
+        MoneyInputFrame_SetCopper(OrctionStartBid, price)
+        MoneyInputFrame_SetCopper(OrctionBuyout,   price)
+    end
+
     -- Reset scroll to top
     local scroll = getglobal("OrctionResultScroll")
     if scroll then scroll:SetVerticalScroll(0) end
@@ -74,7 +212,17 @@ local function Orction_DisplayResults()
             row.cost:SetText(CopperToString(g.costPerItem))
             row.qty:SetText(tostring(g.totalCount))
             row.auctions:SetText(tostring(g.numAuctions))
-            row.buyBtn:SetText("Buy " .. tostring(g.firstCount))
+            if orctionVendorPrice and orctionVendorPrice > 0 and g.costPerItem < orctionVendorPrice then
+                row.bg:SetTexture(0, 0.35, 0, 0.55)
+                row.buyBtn:SetText("Snatch " .. tostring(g.firstCount))
+            else
+                if row.isEven then
+                    row.bg:SetTexture(0.09, 0.09, 0.19, 0.5)
+                else
+                    row.bg:SetTexture(0, 0, 0.09, 0.3)
+                end
+                row.buyBtn:SetText("Buy " .. tostring(g.firstCount))
+            end
             row.frame:Show()
         else
             row.costPerItem = nil
@@ -101,12 +249,30 @@ local function Orction_CollectPage()
     for i = 1, batch do
         local name, texture, count, quality, canUse, level,
               minBid, minIncrement, buyoutPrice = GetAuctionItemInfo("list", i)
-        if buyoutPrice and buyoutPrice > 0 and count and count > 0 then
-            table.insert(orctionSearchResults, {
-                buyout      = buyoutPrice,
-                count       = count,
-                costPerItem = math.floor(buyoutPrice / count),
-            })
+        if name == orctionSearchName then
+            -- Try to resolve vendor price from the first matching AH row
+            if (not orctionVendorPrice or orctionVendorPrice == 0) and SellValues then
+                local link = GetAuctionItemLink("list", i)
+                if link then
+                    local _, _, itemID = string.find(link, "item:(%d+)")
+                    if itemID then
+                        local price = SellValues["item:" .. itemID]
+                        if price and price > 0 then
+                            orctionVendorPrice = price
+                            if OrctionDB and OrctionDB.vendorPrices then
+                                OrctionDB.vendorPrices[name] = price
+                            end
+                        end
+                    end
+                end
+            end
+            if buyoutPrice and buyoutPrice > 0 and count and count > 0 then
+                table.insert(orctionSearchResults, {
+                    buyout      = buyoutPrice,
+                    count       = count,
+                    costPerItem = math.floor(buyoutPrice / count),
+                })
+            end
         end
     end
 
@@ -130,6 +296,8 @@ local function Orction_StartSearch(name)
     orctionQueryDelay    = 0
     orctionWaitTimeout   = 0
     orctionSearchResults = {}
+    orctionVendorPrice   = (OrctionDB and OrctionDB.vendorPrices and OrctionDB.vendorPrices[name]) or 0
+    if OrctionVendorSellValue then OrctionVendorSellValue:SetText("--") end
     for i = 1, table.getn(orctionResultRows) do
         orctionResultRows[i].frame:Hide()
     end
@@ -140,13 +308,22 @@ end
 
 local function Orction_TryBuy()
     if not orctionBuyPending then return end
-    local batch, total = GetNumAuctionItems("list")
+    local batch = GetNumAuctionItems("list")
     for i = 1, batch do
         local name, texture, count, quality, canUse, level,
               minBid, minIncrement, buyoutPrice = GetAuctionItemInfo("list", i)
         if buyoutPrice == orctionBuyPending.buyout then
+            local boughtBuyout = buyoutPrice
             PlaceAuctionBid("list", i, buyoutPrice)
             orctionBuyPending = nil
+            -- Remove the bought auction from local results and refresh the table
+            for j = 1, table.getn(orctionSearchResults) do
+                if orctionSearchResults[j].buyout == boughtBuyout then
+                    table.remove(orctionSearchResults, j)
+                    break
+                end
+            end
+            Orction_DisplayResults()
             return
         end
     end
@@ -180,6 +357,11 @@ end
 local function Orction_GetMaxStacks(itemName, stackSize)
     if not stackSize or stackSize <= 0 then return 0 end
     return math.floor(Orction_GetInventoryCount(itemName) / stackSize)
+end
+
+-- Returns vendor sell price in copper for itemName, or 0 if not determinable.
+local function Orction_GetVendorPrice(itemName)
+    return OrctionVendor_GetPrice(itemName)
 end
 
 -- First bag slot holding >= needed items of itemName.
@@ -218,8 +400,13 @@ local function Orction_CompleteItemDrop(name, texture, count)
     OrctionItemNameText:SetText(name)
     OrctionItemCountBadge:SetText(count > 1 and tostring(count) or "")
     if OrctionCountBox then OrctionCountBox:SetText(tostring(count)) end
+    if OrctionStacksBox then
+        OrctionStacksBox:SetText(tostring(Orction_GetMaxStacks(name, count)))
+    end
     if OrctionDepositValue then OrctionDepositValue:SetText("--") end
     if OrctionDB then OrctionDB.stackCounts[name] = count end
+    orctionSellName = name
+    orctionVendorPrice = Orction_GetVendorPrice(name)
     Orction_StartSearch(name)
 end
 
@@ -250,7 +437,10 @@ local function Orction_ClearItemSlot()
     OrctionItemNameText:SetText("")
     OrctionItemCountBadge:SetText("")
     if OrctionDepositValue then OrctionDepositValue:SetText("--") end
-    orctionSearchName = nil
+    orctionSearchName  = nil
+    orctionSellName    = nil
+    orctionVendorPrice = nil
+    if OrctionVendorSellValue then OrctionVendorSellValue:SetText("--") end
     orctionPendingPost = nil
     if OrctionCreateBtn then OrctionCreateBtn:SetText("Create Auction") end
     for i = 1, table.getn(orctionResultRows) do
@@ -422,7 +612,7 @@ local function Orction_CreateAuction()
     end
 
     -- ── First click: validate + park sell slot (1 bag op) ─────────────────
-    local name = orctionSearchName
+    local name = orctionSellName
     if not name then
         DEFAULT_CHAT_FRAME:AddMessage("Orction: Drop an item in the slot first.")
         return
@@ -505,6 +695,14 @@ StaticPopupDialogs["ORCTION_STACK_CONFIRM"] = {
 
 -- ── Build the AH panel ────────────────────────────────────────────────────
 
+local function Orction_DoTextSearch()
+    if not OrctionSearchBox then return end
+    local text = OrctionSearchBox:GetText()
+    if not text or string.len(text) == 0 then return end
+    orctionVendorPrice = Orction_GetVendorPrice(text)
+    Orction_StartSearch(text)
+end
+
 local function Orction_BuildAHPanel()
     OrctionAHPanel = CreateFrame("Frame", "OrctionAHPanel", AuctionFrame)
     OrctionAHPanel:SetPoint("TOPLEFT", AuctionFrame, "TOPLEFT", 0, 0)
@@ -513,6 +711,28 @@ local function Orction_BuildAHPanel()
     OrctionAHPanel:SetFrameLevel(AuctionFrameAuctions:GetFrameLevel() + 20)
 
     OrctionAHPanel:Hide()
+
+    -- ── Search bar (top, full width) ──────────────────────────────────────────
+    OrctionSearchBox = CreateFrame("EditBox", "OrctionSearchBox", OrctionAHPanel, "InputBoxTemplate")
+    OrctionSearchBox:SetWidth(540)
+    OrctionSearchBox:SetHeight(20)
+    OrctionSearchBox:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 10, -22)
+    OrctionSearchBox:SetAutoFocus(false)
+    OrctionSearchBox:SetMaxLetters(64)
+    OrctionSearchBox:SetScript("OnEnterPressed", function()
+        this:ClearFocus()
+        Orction_DoTextSearch()
+    end)
+    OrctionSearchBox:SetScript("OnEscapePressed", function() this:ClearFocus() end)
+
+    local searchBtn = CreateFrame("Button", "OrctionSearchBtn", OrctionAHPanel)
+    searchBtn:SetWidth(22)
+    searchBtn:SetHeight(22)
+    searchBtn:SetPoint("LEFT", OrctionSearchBox, "RIGHT", 4, 0)
+    searchBtn:SetNormalTexture("Interface\\Common\\UI-Searchbox-Icon")
+    searchBtn:SetHighlightTexture("Interface\\Common\\UI-Searchbox-Icon")
+    searchBtn:GetHighlightTexture():SetBlendMode("ADD")
+    searchBtn:SetScript("OnClick", Orction_DoTextSearch)
 
     -- ── Left panel: absolute positions cloned from AuctionFrameAuctions children ─
     -- All SetPoint anchors are relative to OrctionAHPanel TOPLEFT (= AuctionFrame TOPLEFT).
@@ -550,8 +770,8 @@ local function Orction_BuildAHPanel()
         end
     end)
     itemSlot:SetScript("OnEnter", function()
-        if orctionSearchName then
-            local b, s = Orction_FindBagSlot(orctionSearchName, 1)
+        if orctionSellName then
+            local b, s = Orction_FindBagSlot(orctionSellName, 1)
             if b then
                 GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
                 GameTooltip:SetBagItem(b, s)
@@ -572,13 +792,22 @@ local function Orction_BuildAHPanel()
     OrctionItemCountBadge:SetPoint("BOTTOMRIGHT", itemSlot, "BOTTOMRIGHT", -2, 4)
     OrctionItemCountBadge:SetText("")
 
-    -- Starting Price  (Blizzard StartPrice: x=34 y=183)
+    -- Vendor Sell (below item slot)
+    local vendorSellLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+    vendorSellLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 27, -168)
+    vendorSellLabel:SetText("Vendor Sell:")
+
+    OrctionVendorSellValue = OrctionAHPanel:CreateFontString("OrctionVendorSellValue", "ARTWORK", "GameFontHighlightSmall")
+    OrctionVendorSellValue:SetPoint("LEFT", vendorSellLabel, "RIGHT", 4, 0)
+    OrctionVendorSellValue:SetText("--")
+
+    -- Starting Price
     local startLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    startLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -148)
+    startLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -178)
     startLabel:SetText("Starting Price")
 
     OrctionStartBid = CreateFrame("Frame", "OrctionStartBid", OrctionAHPanel, "MoneyInputFrameTemplate")
-    OrctionStartBid:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -163)
+    OrctionStartBid:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -193)
     ResizeMoneyInputFrame("OrctionStartBid")
 
     -- Duration is fixed at 24h — sync Blizzard's button so CalculateAuctionDeposit is accurate
@@ -586,26 +815,26 @@ local function Orction_BuildAHPanel()
 
     -- Count  ──────────────────────────────────────────────────────────────────
     local countLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    countLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -195)
+    countLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -225)
     countLabel:SetText("Count")
 
     OrctionCountBox = CreateFrame("EditBox", "OrctionCountBox", OrctionAHPanel, "InputBoxTemplate")
     OrctionCountBox:SetWidth(40)
     OrctionCountBox:SetHeight(18)
-    OrctionCountBox:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -210)
+    OrctionCountBox:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -240)
     OrctionCountBox:SetMaxLetters(4)
     OrctionCountBox:SetAutoFocus(false)
     OrctionCountBox:SetText("1")
 
     -- Stacks  ─────────────────────────────────────────────────────────────────
     local stacksLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    stacksLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -233)
+    stacksLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -263)
     stacksLabel:SetText("Stacks")
 
     OrctionStacksBox = CreateFrame("EditBox", "OrctionStacksBox", OrctionAHPanel, "InputBoxTemplate")
     OrctionStacksBox:SetWidth(40)
     OrctionStacksBox:SetHeight(18)
-    OrctionStacksBox:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -248)
+    OrctionStacksBox:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -278)
     OrctionStacksBox:SetMaxLetters(3)
     OrctionStacksBox:SetAutoFocus(false)
     OrctionStacksBox:SetText("1")
@@ -616,23 +845,23 @@ local function Orction_BuildAHPanel()
     maxStacksBtn:SetPoint("LEFT", OrctionStacksBox, "RIGHT", 4, 0)
     maxStacksBtn:SetText("Max")
     maxStacksBtn:SetScript("OnClick", function()
-        if not orctionSearchName then return end
+        if not orctionSellName then return end
         local count = math.max(1, tonumber(OrctionCountBox:GetText()) or 1)
-        OrctionStacksBox:SetText(tostring(Orction_GetMaxStacks(orctionSearchName, count)))
+        OrctionStacksBox:SetText(tostring(Orction_GetMaxStacks(orctionSellName, count)))
     end)
 
     -- Buyout Price  ────────────────────────────────────────────────────────────
     local buyoutLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    buyoutLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 33, -275)
+    buyoutLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 33, -305)
     buyoutLabel:SetText("Buyout Price")
 
     OrctionBuyout = CreateFrame("Frame", "OrctionBuyout", OrctionAHPanel, "MoneyInputFrameTemplate")
-    OrctionBuyout:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 33, -290)
+    OrctionBuyout:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 33, -320)
     ResizeMoneyInputFrame("OrctionBuyout")
 
     -- Deposit  ────────────────────────────────────────────────────────────────
     local depositLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    depositLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 30, -323)
+    depositLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 30, -353)
     depositLabel:SetText("Deposit:")
 
     OrctionDepositValue = OrctionAHPanel:CreateFontString("OrctionDepositValue", "ARTWORK", "GameFontHighlightSmall")
@@ -643,7 +872,7 @@ local function Orction_BuildAHPanel()
     OrctionCreateBtn = CreateFrame("Button", "OrctionCreateBtn", OrctionAHPanel, "UIPanelButtonTemplate")
     OrctionCreateBtn:SetWidth(191)
     OrctionCreateBtn:SetHeight(20)
-    OrctionCreateBtn:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 18, -348)
+    OrctionCreateBtn:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 18, -378)
     OrctionCreateBtn:SetText("Create Auction")
     OrctionCreateBtn:SetScript("OnClick", Orction_CreateAuction)
 
@@ -732,8 +961,10 @@ local function Orction_BuildAHPanel()
             this:GetParent():SetScript("OnClick", function()
                 local row = orctionResultRows[idx]
                 if row and row.costPerItem then
-                    MoneyInputFrame_SetCopper(OrctionStartBid, row.costPerItem)
-                    MoneyInputFrame_SetCopper(OrctionBuyout,   row.costPerItem)
+                    local count = math.max(1, tonumber(OrctionCountBox:GetText()) or 1)
+                    local price = row.costPerItem * count
+                    MoneyInputFrame_SetCopper(OrctionStartBid, price)
+                    MoneyInputFrame_SetCopper(OrctionBuyout,   price)
                 end
             end)
         end)
@@ -741,13 +972,16 @@ local function Orction_BuildAHPanel()
         rowBtn:SetScript("OnClick", function()
             local row = orctionResultRows[idx]
             if row and row.costPerItem then
-                MoneyInputFrame_SetCopper(OrctionStartBid, row.costPerItem)
-                MoneyInputFrame_SetCopper(OrctionBuyout,   row.costPerItem)
+                local count = math.max(1, tonumber(OrctionCountBox:GetText()) or 1)
+                local price = row.costPerItem * count
+                MoneyInputFrame_SetCopper(OrctionStartBid, price)
+                MoneyInputFrame_SetCopper(OrctionBuyout,   price)
             end
         end)
 
         orctionResultRows[i] = { frame = rowBtn, cost = costFS, qty = qtyFS,
-                                  auctions = aucFS, buyBtn = buyBtn,
+                                  auctions = aucFS, buyBtn = buyBtn, bg = bg,
+                                  isEven = (math.mod(i, 2) == 0),
                                   costPerItem = nil, firstBuyout = nil }
         rowBtn:Hide()
     end
@@ -951,6 +1185,43 @@ clearBtn:SetScript("OnClick", function()
     OrctionDebugEditBox:SetText("")
 end)
 
+local clearCacheBtn = CreateFrame("Button", nil, OrctionFrame, "UIPanelButtonTemplate")
+clearCacheBtn:SetWidth(100)
+clearCacheBtn:SetHeight(22)
+clearCacheBtn:SetPoint("BOTTOMLEFT", clearBtn, "BOTTOMRIGHT", 6, 0)
+clearCacheBtn:SetText("Clear Cache")
+clearCacheBtn:SetScript("OnClick", function()
+    if OrctionDB then
+        OrctionDB.vendorPrices = {}
+        OrctionDB.auctionCache = nil
+    end
+    DEFAULT_CHAT_FRAME:AddMessage("Orction: cache cleared")
+end)
+
+local function Orction_PrintVendorCache()
+    local prices = (OrctionDB and OrctionDB.vendorPrices) or {}
+    local keys = {}
+    for k in pairs(prices) do table.insert(keys, k) end
+    table.sort(keys)
+    table.insert(orctionChatLines, "Orction: vendor price cache (" .. tostring(table.getn(keys)) .. ")")
+    for i = 1, table.getn(keys) do
+        local k = keys[i]
+        local v = prices[k]
+        table.insert(orctionChatLines, tostring(k) .. " = " .. CopperToString(v or 0))
+    end
+    while table.getn(orctionChatLines) > 300 do
+        table.remove(orctionChatLines, 1)
+    end
+    Orction_RefreshDebugBox()
+end
+
+local printCacheBtn = CreateFrame("Button", nil, OrctionFrame, "UIPanelButtonTemplate")
+printCacheBtn:SetWidth(100)
+printCacheBtn:SetHeight(22)
+printCacheBtn:SetPoint("BOTTOMLEFT", clearCacheBtn, "BOTTOMRIGHT", 6, 0)
+printCacheBtn:SetText("Print Cache")
+printCacheBtn:SetScript("OnClick", Orction_PrintVendorCache)
+
 -- ── Slash command ─────────────────────────────────────────────────────────
 
 SLASH_ORCTION1 = "/orction"
@@ -970,9 +1241,11 @@ eventFrame:SetScript("OnEvent", function()
     if event == "ADDON_LOADED" then
         if arg1 == ADDON_NAME then
             OrctionDB = OrctionDB or {}
-            OrctionDB.stackCounts = OrctionDB.stackCounts or {}
+            OrctionDB.stackCounts   = OrctionDB.stackCounts   or {}
+            OrctionDB.vendorPrices  = OrctionDB.vendorPrices  or {}
             DEFAULT_CHAT_FRAME:AddMessage(ADDON_NAME .. " initialised")
             Orction_HookChat()
+            Orction_HookVendorPriceTooltip()
         elseif string.lower(arg1) == "blizzard_auctionui" then
             Orction_SetupAH()
             eventFrame:RegisterEvent("AUCTION_HOUSE_SHOW")
