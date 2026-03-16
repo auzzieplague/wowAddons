@@ -6,12 +6,10 @@
 
 # Python venv
 .venv/
-/Auctionator/Auctionator.lua
-/Auctionator/Auctionator.toc
-/Auctionator/Auctionator.xml
-/Auctionator/MonFr.txt
-/orction/docs/orctionLUASystem.md
-/VendorPrice/SellValue.lua
-/orction/docs/todo.md
-/Auctionator/UPT.txt
-/VendorPrice/VendorPrice.lua
+
+# reference addons
+/Auctionator/*
+/VendorPrice/*
+
+# docs
+Orction/docs/*
