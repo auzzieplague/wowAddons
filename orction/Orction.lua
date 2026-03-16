@@ -20,9 +20,13 @@ local orctionPendingPost     = nil   -- { name, startBid, buyout, count, stacksL
 local orctionPendingDrop     = nil   -- { name, texture, count } while confirm dialog is open
 local orctionVendorPrice     = nil   -- vendor sell price (copper) for the current search item
 local orctionSellName        = nil   -- name of the item currently in the sell slot (for Create Auction)
+local orctionPendingSellRead = false -- true when waiting for sell slot info after a swap
 local ORCTION_TOOLTIP_HOOKED = false
 local orctionLastTooltipLink = nil
 local orctionLastTooltipName = nil
+local orctionWatchlistRows   = {}
+local WL_ROW_H               = 16
+local WL_MAX_ROWS            = 13
 
 -- ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -40,6 +44,20 @@ local function CopperToString(copper)
     local s = math.floor(math.mod(copper, 10000) / 100)
     local c = math.mod(copper, 100)
     return g .. "g " .. s .. "s " .. c .. "c"
+end
+
+local function Orction_TitleCaseWords(text)
+    if not text then return text end
+    return string.gsub(text, "(%a)([%w']*)", function(a, b)
+        return string.upper(a) .. b
+    end)
+end
+
+local function Orction_UpdateSearchingText()
+    if not OrctionSearchingText then return end
+    local page = (orctionSearchPage or 0) + 1
+    local total = ORCTION_MAX_PAGES or 1
+    OrctionSearchingText:SetText("Searching... Page " .. page .. "/" .. total)
 end
 
 -- ── Vendor price cache (tooltip hook) ─────────────────────────────────────
@@ -245,6 +263,7 @@ local function Orction_CollectPage()
     if orctionPageProcessed then return end  -- ignore duplicate non-empty firings for this page
     orctionPageProcessed = true
     orctionWaitTimeout   = 0  -- got real data, reset the timeout
+    Orction_UpdateSearchingText()
     for i = 1, batch do
         local name, texture, count, quality, canUse, level,
               minBid, minIncrement, buyoutPrice = GetAuctionItemInfo("list", i)
@@ -301,6 +320,7 @@ local function Orction_StartSearch(name)
         orctionResultRows[i].frame:Hide()
     end
     if OrctionSearchingText then OrctionSearchingText:Show() end
+    Orction_UpdateSearchingText()
     if OrctionNoResultsText  then OrctionNoResultsText:Hide()  end
     QueryAuctionItems(name, nil, nil, nil, nil, nil, 0, nil, nil)
 end
@@ -408,12 +428,8 @@ local function Orction_CompleteItemDrop(name, texture, count)
     Orction_StartSearch(name)
 end
 
--- Called when the user drops an item onto the slot.
-local function Orction_OnItemDrop()
-    ClickAuctionSellItemButton()  -- cursor → sell slot
-    local name, texture, count = GetAuctionSellItemInfo()
+local function Orction_HandleSellSlotItem(name, texture, count)
     if not name then return end
-
     local lastCount = OrctionDB and OrctionDB.stackCounts and OrctionDB.stackCounts[name]
     if lastCount and lastCount ~= count then
         -- Count differs from last used — ask before committing
@@ -424,12 +440,26 @@ local function Orction_OnItemDrop()
     end
 end
 
-local function Orction_ClearItemSlot()
+-- Called when the user drops an item onto the slot.
+local function Orction_OnItemDrop()
+    ClickAuctionSellItemButton()  -- cursor → sell slot
+    local name, texture, count = GetAuctionSellItemInfo()
+    if not name then
+        orctionPendingSellRead = true
+        return
+    end
+    Orction_HandleSellSlotItem(name, texture, count)
+end
+
+local function Orction_ClearItemSlot(keepCursor)
     StaticPopup_Hide("ORCTION_STACK_CONFIRM")
     orctionPendingDrop = nil
+    orctionPendingSellRead = false
     if GetAuctionSellItemInfo() then
         ClickAuctionSellItemButton()
-        ClearCursor()
+        if not keepCursor then
+            ClearCursor()
+        end
     end
     OrctionItemTexture:Hide()
     OrctionItemNameText:SetText("")
@@ -691,9 +721,68 @@ local function Orction_DoTextSearch()
     if not OrctionSearchBox then return end
     local text = OrctionSearchBox:GetText()
     if not text or string.len(text) == 0 then return end
+    if OrctionDB and OrctionDB.settings and OrctionDB.settings.titleCaseSearch then
+        local corrected = Orction_TitleCaseWords(text)
+        if corrected ~= text then
+            DEFAULT_CHAT_FRAME:AddMessage("Orction: Corrected to " .. corrected)
+        end
+        text = corrected
+        OrctionSearchBox:SetText(corrected)
+    end
     orctionVendorPrice = Orction_GetVendorPrice(text)
     Orction_StartSearch(text)
 end
+
+-- ── Watchlist helpers ─────────────────────────────────────────────────────
+
+local function Orction_GetWatchlist()
+    if not OrctionDB then OrctionDB = {} end
+    if not OrctionDB.watchlist then OrctionDB.watchlist = {} end
+    return OrctionDB.watchlist
+end
+
+local function Orction_RefreshWatchlist()
+    if not OrctionWatchlistScroll then return end
+    local list   = Orction_GetWatchlist()
+    local count  = table.getn(list)
+    local offset = FauxScrollFrame_GetOffset(OrctionWatchlistScroll)
+    FauxScrollFrame_Update(OrctionWatchlistScroll, count, WL_MAX_ROWS, WL_ROW_H)
+    for i = 1, WL_MAX_ROWS do
+        local idx = i + offset
+        local row = orctionWatchlistRows[i]
+        if not row then break end
+        if idx <= count then
+            row.nameLabel:SetText(list[idx])
+            row.nameBtn._itemName = list[idx]
+            row.removeBtn._index  = idx
+            row:Show()
+        else
+            row:Hide()
+        end
+    end
+end
+
+local function Orction_AddToWatchlist(name)
+    if not name or string.len(name) == 0 then return end
+    local list = Orction_GetWatchlist()
+    for i = 1, table.getn(list) do
+        if list[i] == name then
+            DEFAULT_CHAT_FRAME:AddMessage("Orction: '" .. name .. "' already in watchlist")
+            return
+        end
+    end
+    table.insert(list, name)
+    DEFAULT_CHAT_FRAME:AddMessage("Orction: added '" .. name .. "' to watchlist (" .. table.getn(list) .. " items)")
+    Orction_RefreshWatchlist()
+end
+
+local function Orction_RemoveFromWatchlist(idx)
+    local list = Orction_GetWatchlist()
+    table.remove(list, idx)
+    Orction_RefreshWatchlist()
+end
+
+-- ── Build the AH panel ────────────────────────────────────────────────────
 
 local function Orction_BuildAHPanel()
     OrctionAHPanel = CreateFrame("Frame", "OrctionAHPanel", AuctionFrame)
@@ -725,6 +814,18 @@ local function Orction_BuildAHPanel()
     searchBtn:SetHighlightTexture("Interface\\Common\\UI-Searchbox-Icon")
     searchBtn:GetHighlightTexture():SetBlendMode("ADD")
     searchBtn:SetScript("OnClick", Orction_DoTextSearch)
+
+    local addWatchBtn = CreateFrame("Button", nil, OrctionAHPanel, "UIPanelButtonTemplate")
+    addWatchBtn:SetWidth(22)
+    addWatchBtn:SetHeight(22)
+    addWatchBtn:SetPoint("LEFT", searchBtn, "RIGHT", 4, 0)
+    addWatchBtn:SetText("+")
+    addWatchBtn:SetScript("OnClick", function()
+        local text = OrctionSearchBox:GetText()
+        if text and string.len(text) > 0 then
+            Orction_AddToWatchlist(text)
+        end
+    end)
 
     -- ── Left panel: absolute positions cloned from AuctionFrameAuctions children ─
     -- All SetPoint anchors are relative to OrctionAHPanel TOPLEFT (= AuctionFrame TOPLEFT).
@@ -760,6 +861,12 @@ local function Orction_BuildAHPanel()
             Orction_OnItemDrop()
         else
             Orction_ClearItemSlot()
+        end
+    end)
+    itemSlot:SetScript("OnDragStart", function()
+        if GetAuctionSellItemInfo() then
+            ClickAuctionSellItemButton()
+            Orction_ClearItemSlot(true)
         end
     end)
     itemSlot:SetScript("OnEnter", function()
@@ -854,6 +961,95 @@ local function Orction_BuildAHPanel()
     OrctionCreateBtn:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 18, -260)
     OrctionCreateBtn:SetText("Create Auction")
     OrctionCreateBtn:SetScript("OnClick", Orction_CreateAuction)
+
+    -- ── Watchlist panel ───────────────────────────────────────────────────────
+    local wlFrame = CreateFrame("Frame", "OrctionWatchlistFrame", OrctionAHPanel)
+    wlFrame:SetWidth(195)
+    wlFrame:SetHeight(280)
+    wlFrame:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 14, -286)
+    wlFrame:SetBackdrop({
+        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile     = true, tileSize = 16, edgeSize = 12,
+        insets   = { left = 3, right = 3, top = 3, bottom = 3 },
+    })
+
+    local wlTitle = wlFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    wlTitle:SetPoint("TOPLEFT", wlFrame, "TOPLEFT", 8, -6)
+    wlTitle:SetText("Watchlist")
+
+    -- FauxScrollFrame provides only the scrollbar widget — rows must NOT be its children
+    -- (ScrollFrame clips its children; rows go in a plain sibling frame instead)
+    OrctionWatchlistScroll = CreateFrame("ScrollFrame", "OrctionWatchlistScroll", wlFrame, "FauxScrollFrameTemplate")
+    OrctionWatchlistScroll:SetWidth(167)
+    OrctionWatchlistScroll:SetHeight(WL_MAX_ROWS * WL_ROW_H)
+    OrctionWatchlistScroll:SetPoint("TOPLEFT", wlFrame, "TOPLEFT", 4, -22)
+    OrctionWatchlistScroll:SetScript("OnVerticalScroll", function()
+        FauxScrollFrame_OnVerticalScroll(arg1, WL_ROW_H, Orction_RefreshWatchlist)
+    end)
+
+    local wlRowsFrame = CreateFrame("Frame", nil, wlFrame)
+    wlRowsFrame:SetWidth(163)
+    wlRowsFrame:SetHeight(WL_MAX_ROWS * WL_ROW_H)
+    wlRowsFrame:SetPoint("TOPLEFT", wlFrame, "TOPLEFT", 4, -22)
+
+    for i = 1, WL_MAX_ROWS do
+        local row = CreateFrame("Frame", nil, wlRowsFrame)
+        row:SetWidth(163)
+        row:SetHeight(WL_ROW_H)
+        row:SetPoint("TOPLEFT", wlRowsFrame, "TOPLEFT", 0, -(i - 1) * WL_ROW_H)
+
+        local nameBtn = CreateFrame("Button", nil, row)
+        nameBtn:SetWidth(142)
+        nameBtn:SetHeight(WL_ROW_H)
+        nameBtn:SetPoint("LEFT", row, "LEFT", 2, 0)
+        nameBtn:SetScript("OnClick", function()
+            if this._itemName then
+                OrctionSearchBox:SetText(this._itemName)
+                Orction_DoTextSearch()
+            end
+        end)
+
+        local nameLabel = nameBtn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        nameLabel:SetAllPoints()
+        nameLabel:SetJustifyH("LEFT")
+
+        local removeBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+        removeBtn:SetWidth(18)
+        removeBtn:SetHeight(WL_ROW_H - 2)
+        removeBtn:SetPoint("RIGHT", row, "RIGHT", -2, 0)
+        removeBtn:SetText("-")
+        removeBtn:SetScript("OnClick", function()
+            if this._index then
+                Orction_RemoveFromWatchlist(this._index)
+            end
+        end)
+
+        row.nameBtn   = nameBtn
+        row.nameLabel = nameLabel
+        row.removeBtn = removeBtn
+        row:Hide()
+        orctionWatchlistRows[i] = row
+    end
+
+    -- Scan placeholder buttons
+    local wlVendorBtn = CreateFrame("Button", nil, wlFrame, "UIPanelButtonTemplate")
+    wlVendorBtn:SetWidth(56)
+    wlVendorBtn:SetHeight(20)
+    wlVendorBtn:SetPoint("BOTTOMLEFT", wlFrame, "BOTTOMLEFT", 6, 6)
+    wlVendorBtn:SetText("Vendor")
+
+    local wlFirstBtn = CreateFrame("Button", nil, wlFrame, "UIPanelButtonTemplate")
+    wlFirstBtn:SetWidth(44)
+    wlFirstBtn:SetHeight(20)
+    wlFirstBtn:SetPoint("LEFT", wlVendorBtn, "RIGHT", 4, 0)
+    wlFirstBtn:SetText("First")
+
+    local wlFullBtn = CreateFrame("Button", nil, wlFrame, "UIPanelButtonTemplate")
+    wlFullBtn:SetWidth(40)
+    wlFullBtn:SetHeight(20)
+    wlFullBtn:SetPoint("LEFT", wlFirstBtn, "RIGHT", 4, 0)
+    wlFullBtn:SetText("Full")
 
     -- ── Results table (right panel, scrollable) ────────────────────────────
     -- Right panel footprint from dump: x=219, y=76, w=576, h=37 per row
@@ -952,8 +1148,7 @@ local function Orction_BuildAHPanel()
             if row and row.costPerItem then
                 local count = math.max(1, tonumber(OrctionCountBox:GetText()) or 1)
                 local price = row.costPerItem * count
-                MoneyInputFrame_SetCopper(OrctionStartBid, price)
-                MoneyInputFrame_SetCopper(OrctionBuyout,   price)
+                MoneyInputFrame_SetCopper(OrctionBuyout, price)
             end
         end)
 
@@ -978,12 +1173,21 @@ local function Orction_BuildAHPanel()
     -- ── Listen for item slot and search result changes ─────────────────────
 
     OrctionAHPanel:RegisterEvent("AUCTION_ITEM_LIST_UPDATE")
+    OrctionAHPanel:RegisterEvent("NEW_AUCTION_UPDATE")
     OrctionAHPanel:SetScript("OnEvent", function()
         if event == "AUCTION_ITEM_LIST_UPDATE" then
             if orctionBuyPending then
                 Orction_TryBuy()
             else
                 Orction_CollectPage()
+            end
+        elseif event == "NEW_AUCTION_UPDATE" then
+            if orctionPendingSellRead then
+                local name, texture, count = GetAuctionSellItemInfo()
+                if name then
+                    orctionPendingSellRead = false
+                    Orction_HandleSellSlotItem(name, texture, count)
+                end
             end
         end
     end)
@@ -1025,6 +1229,7 @@ local function Orction_OnTabClick(index)
         PanelTemplates_SetTab(AuctionFrame, ORCTION_TAB_INDEX)
         AuctionFrameAuctions:Hide()
         OrctionAHPanel:Show()
+        Orction_RefreshWatchlist()
     else
         OrctionAHPanel:Hide()
         orig_AuctionFrameTab_OnClick(index)

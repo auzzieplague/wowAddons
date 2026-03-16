@@ -157,15 +157,25 @@ auctionDesc:EnableKeyboard(false)
 auctionDesc:SetAutoFocus(false)
 auctionDesc:SetText("- Compare market price before posting\n- Automatic stack posting\n- Vendor profit snatching")
 
+local titleCaseCheck = CreateFrame("CheckButton", "OrctionTitleCaseSearchCheck", auctionPanel, "OptionsCheckButtonTemplate")
+titleCaseCheck:SetPoint("TOPLEFT", auctionDesc, "BOTTOMLEFT", 0, -10)
+getglobal("OrctionTitleCaseSearchCheckText"):SetText("Title-case text search terms")
+
+titleCaseCheck:SetScript("OnClick", function()
+    if OrctionDB and OrctionDB.settings then
+        OrctionDB.settings.titleCaseSearch = (this:GetChecked() == 1)
+    end
+end)
+
 -- "Pages to Scan" label
 local pagesLabel = auctionPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-pagesLabel:SetPoint("TOPLEFT", auctionPanel, "TOPLEFT", 10, -120)
+pagesLabel:SetPoint("TOPLEFT", titleCaseCheck, "BOTTOMLEFT", 0, -14)
 pagesLabel:SetText("Pages to Scan")
 
 -- Slider
 local pagesSlider = CreateFrame("Slider", "OrctionPagesSlider", auctionPanel, "OptionsSliderTemplate")
 pagesSlider:SetWidth(200)
-pagesSlider:SetPoint("TOPLEFT", auctionPanel, "TOPLEFT", 10, -140)
+pagesSlider:SetPoint("TOPLEFT", pagesLabel, "BOTTOMLEFT", 0, -6)
 pagesSlider:SetMinMaxValues(1, 10)
 pagesSlider:SetValueStep(1)
 pagesSlider:SetValue(3)
@@ -188,6 +198,7 @@ pagesSlider:SetScript("OnValueChanged", function()
         OrctionDB.settings.maxPages = val
     end
 end)
+
 
 -------------------------------------------------------------------------------
 -- TAB 2: Post
@@ -273,8 +284,9 @@ local function OrctionSettings_ApplyToUI()
     if s.postEnabled      then OrctionPostEnabledCheck:SetChecked(1)      else OrctionPostEnabledCheck:SetChecked(nil)      end
     if s.inventoryEnabled then OrctionInventoryEnabledCheck:SetChecked(1) else OrctionInventoryEnabledCheck:SetChecked(nil) end
     if s.tooltipEnabled   then OrctionTooltipEnabledCheck:SetChecked(1)  else OrctionTooltipEnabledCheck:SetChecked(nil)  end
+    if s.titleCaseSearch  then OrctionTitleCaseSearchCheck:SetChecked(1) else OrctionTitleCaseSearchCheck:SetChecked(nil) end
 
-    -- Slider
+    -- Sliders
     local pages = s.maxPages or 3
     pagesSlider:SetValue(pages)
     pagesValueText:SetText(tostring(pages))
@@ -305,10 +317,14 @@ settingsEventFrame:SetScript("OnEvent", function()
         if s.postEnabled      == nil then s.postEnabled      = true  end
         if s.inventoryEnabled == nil then s.inventoryEnabled = true  end
         if s.tooltipEnabled   == nil then s.tooltipEnabled   = true  end
+        if s.titleCaseSearch  == nil then s.titleCaseSearch  = true  end
         if s.maxPages         == nil then s.maxPages         = 3     end
 
         -- Sync global used by Orction.lua search logic
         ORCTION_MAX_PAGES = s.maxPages
+
+        -- Ensure watchlist table exists
+        if not OrctionDB.watchlist then OrctionDB.watchlist = {} end
     end
 end)
 
