@@ -271,6 +271,64 @@ postEnabledCheck:SetScript("OnClick", function()
     end
 end)
 
+-- "Mail Open Delay" label
+local mailDelayLabel = postPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+mailDelayLabel:SetPoint("TOPLEFT", postEnabledCheck, "BOTTOMLEFT", 0, -14)
+mailDelayLabel:SetText("Mail Open Delay (ms)")
+
+-- Slider: 100–2000 ms, step 100
+local mailDelaySlider = CreateFrame("Slider", "OrctionMailDelaySlider", postPanel, "OptionsSliderTemplate")
+mailDelaySlider:SetWidth(200)
+mailDelaySlider:SetPoint("TOPLEFT", mailDelayLabel, "BOTTOMLEFT", 0, -6)
+mailDelaySlider:SetMinMaxValues(100, 2000)
+mailDelaySlider:SetValueStep(100)
+mailDelaySlider:SetValue(500)
+
+getglobal("OrctionMailDelaySliderLow"):SetText("100")
+getglobal("OrctionMailDelaySliderHigh"):SetText("2000")
+
+local mailDelayValueText = postPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+mailDelayValueText:SetPoint("LEFT", mailDelaySlider, "RIGHT", 10, 0)
+mailDelayValueText:SetText("500")
+
+mailDelaySlider:SetScript("OnValueChanged", function()
+    local val = math.floor(this:GetValue() / 100 + 0.5) * 100
+    mailDelayValueText:SetText(tostring(val))
+    ORCTION_MAIL_OPEN_DELAY = val / 1000
+    if OrctionDB and OrctionDB.settings then
+        OrctionDB.settings.mailOpenDelay = val
+    end
+end)
+
+-- "Mail Open Retries" label
+local mailRetriesLabel = postPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+mailRetriesLabel:SetPoint("TOPLEFT", mailDelaySlider, "BOTTOMLEFT", 0, -16)
+mailRetriesLabel:SetText("Mail Open Retries")
+
+-- Slider: 0–5, step 1
+local mailRetriesSlider = CreateFrame("Slider", "OrctionMailRetriesSlider", postPanel, "OptionsSliderTemplate")
+mailRetriesSlider:SetWidth(200)
+mailRetriesSlider:SetPoint("TOPLEFT", mailRetriesLabel, "BOTTOMLEFT", 0, -6)
+mailRetriesSlider:SetMinMaxValues(0, 5)
+mailRetriesSlider:SetValueStep(1)
+mailRetriesSlider:SetValue(2)
+
+getglobal("OrctionMailRetriesSliderLow"):SetText("0")
+getglobal("OrctionMailRetriesSliderHigh"):SetText("5")
+
+local mailRetriesValueText = postPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+mailRetriesValueText:SetPoint("LEFT", mailRetriesSlider, "RIGHT", 10, 0)
+mailRetriesValueText:SetText("2")
+
+mailRetriesSlider:SetScript("OnValueChanged", function()
+    local val = math.floor(this:GetValue() + 0.5)
+    mailRetriesValueText:SetText(tostring(val))
+    ORCTION_MAIL_OPEN_RETRIES = val
+    if OrctionDB and OrctionDB.settings then
+        OrctionDB.settings.mailOpenRetries = val
+    end
+end)
+
 -------------------------------------------------------------------------------
 -- TAB 3: Inventory
 -------------------------------------------------------------------------------
@@ -355,6 +413,14 @@ local function OrctionSettings_ApplyToUI()
     local mr = s.maxRetries or 2
     maxRetriesSlider:SetValue(mr)
     maxRetriesValueText:SetText(tostring(mr))
+
+    local md = s.mailOpenDelay or 500
+    mailDelaySlider:SetValue(md)
+    mailDelayValueText:SetText(tostring(md))
+
+    local mrt = s.mailOpenRetries or 2
+    mailRetriesSlider:SetValue(mrt)
+    mailRetriesValueText:SetText(tostring(mrt))
 end
 
 OrctionFrame:SetScript("OnShow", function()
@@ -387,6 +453,8 @@ settingsEventFrame:SetScript("OnEvent", function()
         if s.exactMatch       == nil then s.exactMatch       = true  end
         if s.retryDelay       == nil then s.retryDelay       = 500   end
         if s.maxRetries       == nil then s.maxRetries       = 2     end
+        if s.mailOpenDelay    == nil then s.mailOpenDelay    = 500   end
+        if s.mailOpenRetries  == nil then s.mailOpenRetries  = 2     end
 
         -- Sync exact match checkbox
         if OrctionExactMatchCheck then
@@ -394,10 +462,12 @@ settingsEventFrame:SetScript("OnEvent", function()
             else                 OrctionExactMatchCheck:SetChecked(nil) end
         end
 
-        -- Sync globals used by Orction.lua search logic
-        ORCTION_MAX_PAGES   = s.maxPages
-        ORCTION_RETRY_DELAY = s.retryDelay / 1000
-        ORCTION_MAX_RETRIES = s.maxRetries
+        -- Sync globals used by Orction.lua and OrctionPostbox.lua
+        ORCTION_MAX_PAGES         = s.maxPages
+        ORCTION_RETRY_DELAY       = s.retryDelay / 1000
+        ORCTION_MAX_RETRIES       = s.maxRetries
+        ORCTION_MAIL_OPEN_DELAY   = s.mailOpenDelay / 1000
+        ORCTION_MAIL_OPEN_RETRIES = s.mailOpenRetries
 
         -- Ensure persistent tables exist
         if not OrctionDB.vendorPrices then OrctionDB.vendorPrices = {} end

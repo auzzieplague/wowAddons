@@ -37,6 +37,7 @@ local orctionScanMode          = false -- true while showing accumulated scan re
 local orctionScanNextPending   = false -- waiting for inter-item delay before next query
 local orctionScanNextDelay     = 0    -- seconds accumulated toward next scan item
 local orctionScanItemStartCount = 0   -- orctionSimilarResults count at start of current scan item
+local orctionScanCancel        = false -- user requested scan cancel
 local orctionQueryRetryCount   = 0    -- retries fired for the current query (rate-limit recovery)
 local ORCTION_RETRY_DELAY      = 0.5  -- seconds to wait before retrying an empty query (synced from DB)
 local ORCTION_MAX_RETRIES      = 2    -- maximum retries per query before giving up (synced from DB)
@@ -919,6 +920,7 @@ local function Orction_StartScan()
         DEFAULT_CHAT_FRAME:AddMessage("Orction: watchlist is empty")
         return
     end
+    orctionScanCancel     = false
     orctionSearchResults  = {}
     orctionSimilarResults = {}
     orctionVendorCache    = {}
@@ -936,6 +938,22 @@ end
 -- ── OnUpdate handler (module-level to avoid adding upvalues to BuildAHPanel) ──
 
 local function Orction_AHPanel_OnUpdate()
+    if orctionScanCancel then
+        orctionScanCancel     = false
+        orctionScanMode       = false
+        orctionScanQueue      = nil
+        orctionScanNextPending = false
+        orctionScanNextDelay   = 0
+        orctionSearchActive    = false
+        orctionSearchRetry     = false
+        orctionQueryRetryCount = 0
+        orctionQueryDelay      = 0
+        orctionWaitTimeout     = 0
+        if OrctionSearchingText then OrctionSearchingText:Hide() end
+        DEFAULT_CHAT_FRAME:AddMessage("Orction: scan cancelled")
+        Orction_DisplayResults()
+        return
+    end
     if orctionPendingSellRead then
         orctionSellPollElapsed = orctionSellPollElapsed + arg1
         local name, texture, count = GetAuctionSellItemInfo()
@@ -1197,6 +1215,17 @@ local function Orction_BuildAHPanel()
         local wl = getglobal("OrctionWatchlistFrame")
         if wl then
             if wl:IsShown() then wl:Hide() else wl:Show() ; Orction_RefreshWatchlist() end
+        end
+    end)
+
+    local cancelScanBtn = CreateFrame("Button", nil, OrctionAHPanel, "UIPanelButtonTemplate")
+    cancelScanBtn:SetWidth(120)
+    cancelScanBtn:SetHeight(23)
+    cancelScanBtn:SetPoint("TOPLEFT", watchlistToggleBtn, "BOTTOMLEFT", 0, -10)
+    cancelScanBtn:SetText("Cancel Scan")
+    cancelScanBtn:SetScript("OnClick", function()
+        if orctionScanMode or orctionSearchActive or orctionScanNextPending or orctionSearchRetry then
+            orctionScanCancel = true
         end
     end)
 
