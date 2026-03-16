@@ -29,13 +29,14 @@ end)
 
 -- Backdrop
 OrctionFrame:SetBackdrop({
-    bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
+    bgFile   = "Interface\\Tooltips\\UI-Tooltip-Background",
     edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
     tile     = true,
     tileSize = 32,
     edgeSize = 32,
     insets   = { left = 11, right = 12, top = 12, bottom = 11 },
 })
+OrctionFrame:SetBackdropColor(0, 0, 0, 1)
 
 -------------------------------------------------------------------------------
 -- Title bar texture + title text
@@ -48,7 +49,7 @@ titleBar:SetHeight(64)
 titleBar:SetPoint("TOP", OrctionFrame, "TOP", 0, 12)
 
 local titleText = OrctionFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-titleText:SetPoint("TOP", OrctionFrame, "TOP", 0, -14)
+titleText:SetPoint("TOP", OrctionFrame, "TOP", 0, 6)
 titleText:SetText("Orction")
 
 -------------------------------------------------------------------------------
@@ -78,21 +79,22 @@ local auctionPanel    = CreateContentPanel("OrctionAuctionPanel")
 local postPanel       = CreateContentPanel("OrctionPostPanel")
 local inventoryPanel  = CreateContentPanel("OrctionInventoryPanel")
 local dataPanel       = CreateContentPanel("OrctionDataPanel")
+local devPanel        = CreateContentPanel("OrctionDevPanel")
 local creditsPanel    = CreateContentPanel("OrctionCreditsPanel")
 
 -- Table for easy indexed access
-local orctionPanels = { auctionPanel, postPanel, inventoryPanel, dataPanel, creditsPanel }
+local orctionPanels = { auctionPanel, postPanel, inventoryPanel, dataPanel, devPanel, creditsPanel }
 
 -------------------------------------------------------------------------------
 -- Tab buttons
 -------------------------------------------------------------------------------
 
-local tabLabels = { "Auction", "Post", "Inventory", "Data", "Credits" }
+local tabLabels = { "Auction", "Post", "Inventory", "Data", "Dev", "Credits" }
 
-OrctionFrame.numTabs = 5
-PanelTemplates_SetNumTabs(OrctionFrame, 5)
+OrctionFrame.numTabs = 6
+PanelTemplates_SetNumTabs(OrctionFrame, 6)
 
-for i = 1, 5 do
+for i = 1, 6 do
     local tab = CreateFrame("Button", "OrctionFrameTab"..i, OrctionFrame, "CharacterFrameTabButtonTemplate")
     tab:SetID(i)
     tab:SetText(tabLabels[i])
@@ -120,7 +122,7 @@ end
 
 function OrctionSettings_SelectTab(id)
     -- Hide all panels
-    for i = 1, 5 do
+    for i = 1, 6 do
         orctionPanels[i]:Hide()
     end
     -- Show the selected panel
@@ -135,7 +137,7 @@ end
 -- TAB 1: Auction
 -------------------------------------------------------------------------------
 
--- Enable checkbox
+-- Enable checkbox (left column)
 local auctionEnabledCheck = CreateFrame("CheckButton", "OrctionAuctionEnabledCheck", auctionPanel, "OptionsCheckButtonTemplate")
 auctionEnabledCheck:SetPoint("TOPLEFT", auctionPanel, "TOPLEFT", 10, -10)
 getglobal("OrctionAuctionEnabledCheckText"):SetText("Enable Auction Features")
@@ -159,7 +161,7 @@ end)
 -- Feature description box (read-only)
 local auctionDesc = CreateFrame("EditBox", nil, auctionPanel)
 auctionDesc:SetMultiLine(true)
-auctionDesc:SetWidth(460)
+auctionDesc:SetWidth(230)
 auctionDesc:SetHeight(60)
 auctionDesc:SetPoint("TOPLEFT", autoOpenTabCheck, "BOTTOMLEFT", 0, -10)
 auctionDesc:SetFontObject("GameFontHighlightSmall")
@@ -169,7 +171,7 @@ auctionDesc:SetAutoFocus(false)
 auctionDesc:SetText("- Compare market price before posting\n- Automatic stack posting\n- Vendor profit snatching")
 
 local titleCaseCheck = CreateFrame("CheckButton", "OrctionTitleCaseSearchCheck", auctionPanel, "OptionsCheckButtonTemplate")
-titleCaseCheck:SetPoint("TOPLEFT", auctionDesc, "BOTTOMLEFT", 0, -10)
+titleCaseCheck:SetPoint("TOPLEFT", auctionDesc, "BOTTOMLEFT", 0, -8)
 getglobal("OrctionTitleCaseSearchCheckText"):SetText("Title-case text search terms")
 
 titleCaseCheck:SetScript("OnClick", function()
@@ -180,12 +182,12 @@ end)
 
 -- "Pages to Scan" label
 local pagesLabel = auctionPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-pagesLabel:SetPoint("TOPLEFT", titleCaseCheck, "BOTTOMLEFT", 0, -14)
+pagesLabel:SetPoint("TOPLEFT", titleCaseCheck, "BOTTOMLEFT", 0, -12)
 pagesLabel:SetText("Pages to Scan")
 
 -- Slider
 local pagesSlider = CreateFrame("Slider", "OrctionPagesSlider", auctionPanel, "OptionsSliderTemplate")
-pagesSlider:SetWidth(200)
+pagesSlider:SetWidth(150)
 pagesSlider:SetPoint("TOPLEFT", pagesLabel, "BOTTOMLEFT", 0, -6)
 pagesSlider:SetMinMaxValues(1, 10)
 pagesSlider:SetValueStep(1)
@@ -197,7 +199,7 @@ getglobal("OrctionPagesSliderHigh"):SetText("10")
 
 -- Current value display next to slider
 local pagesValueText = auctionPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-pagesValueText:SetPoint("LEFT", pagesSlider, "RIGHT", 10, 0)
+pagesValueText:SetPoint("LEFT", pagesSlider, "RIGHT", 6, 0)
 pagesValueText:SetText("3")
 
 pagesSlider:SetScript("OnValueChanged", function()
@@ -211,27 +213,27 @@ end)
 
 -- "Retry Delay" label
 local retryDelayLabel = auctionPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-retryDelayLabel:SetPoint("TOPLEFT", pagesSlider, "BOTTOMLEFT", 0, -16)
-retryDelayLabel:SetText("Retry Delay (ms)")
+retryDelayLabel:SetPoint("TOPLEFT", auctionPanel, "TOPLEFT", 270, -10)
+retryDelayLabel:SetText("Page Delay (s)")
 
--- Retry delay slider (200–2000 ms, step 100)
+-- Retry delay slider (3000–10000 ms in 1s steps)
 local retryDelaySlider = CreateFrame("Slider", "OrctionRetryDelaySlider", auctionPanel, "OptionsSliderTemplate")
-retryDelaySlider:SetWidth(200)
+retryDelaySlider:SetWidth(150)
 retryDelaySlider:SetPoint("TOPLEFT", retryDelayLabel, "BOTTOMLEFT", 0, -6)
-retryDelaySlider:SetMinMaxValues(200, 2000)
-retryDelaySlider:SetValueStep(100)
-retryDelaySlider:SetValue(500)
+retryDelaySlider:SetMinMaxValues(3000, 10000)
+retryDelaySlider:SetValueStep(1000)
+retryDelaySlider:SetValue(5000)
 
-getglobal("OrctionRetryDelaySliderLow"):SetText("200")
-getglobal("OrctionRetryDelaySliderHigh"):SetText("2000")
+getglobal("OrctionRetryDelaySliderLow"):SetText("3s")
+getglobal("OrctionRetryDelaySliderHigh"):SetText("10s")
 
 local retryDelayValueText = auctionPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-retryDelayValueText:SetPoint("LEFT", retryDelaySlider, "RIGHT", 10, 0)
-retryDelayValueText:SetText("500")
+retryDelayValueText:SetPoint("LEFT", retryDelaySlider, "RIGHT", 6, 0)
+retryDelayValueText:SetText("5s")
 
 retryDelaySlider:SetScript("OnValueChanged", function()
-    local val = math.floor(this:GetValue() / 100 + 0.5) * 100
-    retryDelayValueText:SetText(tostring(val))
+    local val = math.floor(this:GetValue() / 1000 + 0.5) * 1000
+    retryDelayValueText:SetText(math.floor(val / 1000) .. "s")
     ORCTION_RETRY_DELAY = val / 1000
     if OrctionDB and OrctionDB.settings then
         OrctionDB.settings.retryDelay = val
@@ -240,12 +242,12 @@ end)
 
 -- "Max Retries" label
 local maxRetriesLabel = auctionPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-maxRetriesLabel:SetPoint("TOPLEFT", retryDelaySlider, "BOTTOMLEFT", 0, -16)
+maxRetriesLabel:SetPoint("TOPLEFT", retryDelaySlider, "BOTTOMLEFT", 0, -12)
 maxRetriesLabel:SetText("Max Retries")
 
 -- Max retries slider (0–5, step 1)
 local maxRetriesSlider = CreateFrame("Slider", "OrctionMaxRetriesSlider", auctionPanel, "OptionsSliderTemplate")
-maxRetriesSlider:SetWidth(200)
+maxRetriesSlider:SetWidth(150)
 maxRetriesSlider:SetPoint("TOPLEFT", maxRetriesLabel, "BOTTOMLEFT", 0, -6)
 maxRetriesSlider:SetMinMaxValues(0, 5)
 maxRetriesSlider:SetValueStep(1)
@@ -255,7 +257,7 @@ getglobal("OrctionMaxRetriesSliderLow"):SetText("0")
 getglobal("OrctionMaxRetriesSliderHigh"):SetText("5")
 
 local maxRetriesValueText = auctionPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-maxRetriesValueText:SetPoint("LEFT", maxRetriesSlider, "RIGHT", 10, 0)
+maxRetriesValueText:SetPoint("LEFT", maxRetriesSlider, "RIGHT", 6, 0)
 maxRetriesValueText:SetText("2")
 
 maxRetriesSlider:SetScript("OnValueChanged", function()
@@ -264,6 +266,35 @@ maxRetriesSlider:SetScript("OnValueChanged", function()
     ORCTION_MAX_RETRIES = val
     if OrctionDB and OrctionDB.settings then
         OrctionDB.settings.maxRetries = val
+    end
+end)
+
+-- "Data Cache" label
+local dataCacheLabel = auctionPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+dataCacheLabel:SetPoint("TOPLEFT", maxRetriesSlider, "BOTTOMLEFT", 0, -12)
+dataCacheLabel:SetText("Data Cache (hours)")
+
+-- Data cache slider (1–24 hours, step 1)
+local dataCacheSlider = CreateFrame("Slider", "OrctionDataCacheSlider", auctionPanel, "OptionsSliderTemplate")
+dataCacheSlider:SetWidth(150)
+dataCacheSlider:SetPoint("TOPLEFT", dataCacheLabel, "BOTTOMLEFT", 0, -6)
+dataCacheSlider:SetMinMaxValues(1, 24)
+dataCacheSlider:SetValueStep(1)
+dataCacheSlider:SetValue(1)
+
+getglobal("OrctionDataCacheSliderLow"):SetText("1")
+getglobal("OrctionDataCacheSliderHigh"):SetText("24")
+
+local dataCacheValueText = auctionPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+dataCacheValueText:SetPoint("LEFT", dataCacheSlider, "RIGHT", 6, 0)
+dataCacheValueText:SetText("1")
+
+dataCacheSlider:SetScript("OnValueChanged", function()
+    local val = math.floor(this:GetValue() + 0.5)
+    dataCacheValueText:SetText(tostring(val))
+    ORCTION_DATA_CACHE_HOURS = val
+    if OrctionDB and OrctionDB.settings then
+        OrctionDB.settings.dataCacheHours = val
     end
 end)
 
@@ -568,7 +599,129 @@ purgeBtn:SetPoint("BOTTOMRIGHT", OrctionFrame, "BOTTOMRIGHT", -110, 12)
 analyzeBtn:SetPoint("LEFT", purgeBtn, "RIGHT", 6, 0)
 
 -------------------------------------------------------------------------------
--- TAB 5: Credits
+-- TAB 5: Dev
+-------------------------------------------------------------------------------
+
+local devTitle = devPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+devTitle:SetPoint("TOPLEFT", devPanel, "TOPLEFT", 10, -10)
+devTitle:SetText("Icon Picker (Item IDs)")
+
+local devIconBtn = CreateFrame("Button", nil, devPanel)
+devIconBtn:SetWidth(40)
+devIconBtn:SetHeight(40)
+devIconBtn:SetPoint("TOPLEFT", devTitle, "BOTTOMLEFT", 0, -10)
+
+local devIconTex = devIconBtn:CreateTexture(nil, "ARTWORK")
+devIconTex:SetAllPoints(devIconBtn)
+devIconTex:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+
+local devNameText = devPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+devNameText:SetPoint("LEFT", devIconBtn, "RIGHT", 10, 6)
+devNameText:SetText("Item not cached")
+
+local devDetailText = devPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+devDetailText:SetPoint("TOPLEFT", devNameText, "BOTTOMLEFT", 0, -2)
+devDetailText:SetText("ID: 1")
+
+local devPathText = devPanel:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+devPathText:SetPoint("TOPLEFT", devDetailText, "BOTTOMLEFT", 0, -2)
+devPathText:SetText("")
+
+local devItemIdLabel = devPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+devItemIdLabel:SetPoint("TOPLEFT", devIconBtn, "BOTTOMLEFT", 0, -12)
+devItemIdLabel:SetText("Item ID")
+
+local devItemIdBox = CreateFrame("EditBox", "OrctionDevItemIdBox", devPanel, "InputBoxTemplate")
+devItemIdBox:SetWidth(80)
+devItemIdBox:SetHeight(20)
+devItemIdBox:SetPoint("LEFT", devItemIdLabel, "RIGHT", 8, 0)
+devItemIdBox:SetAutoFocus(false)
+devItemIdBox:SetText("1")
+
+local devItemIdSlider = CreateFrame("Slider", "OrctionDevItemIdSlider", devPanel, "OptionsSliderTemplate")
+devItemIdSlider:SetWidth(220)
+devItemIdSlider:SetPoint("TOPLEFT", devItemIdLabel, "BOTTOMLEFT", 0, -8)
+devItemIdSlider:SetMinMaxValues(1, 30000)
+devItemIdSlider:SetValueStep(1)
+devItemIdSlider:SetValue(1)
+
+getglobal("OrctionDevItemIdSliderLow"):SetText("1")
+getglobal("OrctionDevItemIdSliderHigh"):SetText("30000")
+
+local devItemIdValueText = devPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+devItemIdValueText:SetPoint("LEFT", devItemIdSlider, "RIGHT", 8, 0)
+devItemIdValueText:SetText("1")
+
+local devTooltip = CreateFrame("GameTooltip", "OrctionDevTooltip", UIParent, "GameTooltipTemplate")
+devTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+
+local devPendingId = nil
+local devPendingElapsed = 0
+
+local function OrctionDev_RequestItemInfo(id)
+    devTooltip:SetHyperlink("item:" .. id)
+    devTooltip:Hide()
+end
+
+local function OrctionDev_UpdateItemInfo(id, noRequest)
+    local name, link, quality, level, minLevel, itemType, subType, stack, equipLoc, texture = GetItemInfo(id)
+    if not name then
+        devIconTex:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+        devNameText:SetText("Item not cached")
+        devDetailText:SetText("ID: " .. id)
+        devPathText:SetText("")
+        if not noRequest then
+            devPendingId = id
+            devPendingElapsed = 0
+            OrctionDev_RequestItemInfo(id)
+        end
+        return
+    end
+
+    devPendingId = nil
+    devIconTex:SetTexture(texture or "Interface\\Icons\\INV_Misc_QuestionMark")
+    devNameText:SetText(name)
+    devDetailText:SetText("ID: " .. id .. "  " .. (itemType or "") .. " / " .. (subType or ""))
+    devPathText:SetText(texture or "")
+end
+
+devItemIdBox:SetScript("OnEnterPressed", function()
+    local v = tonumber(this:GetText())
+    if not v then
+        this:ClearFocus()
+        return
+    end
+    if v < 1 then v = 1 end
+    if v > 30000 then v = 30000 end
+    devItemIdSlider:SetValue(v)
+    this:ClearFocus()
+end)
+
+devItemIdSlider:SetScript("OnValueChanged", function()
+    local val = math.floor(this:GetValue() + 0.5)
+    devItemIdValueText:SetText(tostring(val))
+    devItemIdBox:SetText(tostring(val))
+    OrctionDev_UpdateItemInfo(val)
+end)
+
+local devTimer = CreateFrame("Frame")
+devTimer:SetScript("OnUpdate", function()
+    if not devPendingId then return end
+    devPendingElapsed = devPendingElapsed + (arg1 or 0)
+    if devPendingElapsed < 0.2 then return end
+    devPendingElapsed = 0
+    local name = GetItemInfo(devPendingId)
+    if name then
+        OrctionDev_UpdateItemInfo(devPendingId, true)
+    else
+        OrctionDev_RequestItemInfo(devPendingId)
+    end
+end)
+
+OrctionDev_UpdateItemInfo(1)
+
+-------------------------------------------------------------------------------
+-- TAB 6: Credits
 -------------------------------------------------------------------------------
 
 local creditsLine1 = creditsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -621,13 +774,17 @@ local function OrctionSettings_ApplyToUI()
     pagesSlider:SetValue(pages)
     pagesValueText:SetText(tostring(pages))
 
-    local rd = s.retryDelay or 500
+    local rd = s.retryDelay or 5000
     retryDelaySlider:SetValue(rd)
-    retryDelayValueText:SetText(tostring(rd))
+    retryDelayValueText:SetText(math.floor(rd / 1000) .. "s")
 
     local mr = s.maxRetries or 2
     maxRetriesSlider:SetValue(mr)
     maxRetriesValueText:SetText(tostring(mr))
+
+    local dch = s.dataCacheHours or 1
+    dataCacheSlider:SetValue(dch)
+    dataCacheValueText:SetText(tostring(dch))
 
     local md = s.mailOpenDelay or 500
     mailDelaySlider:SetValue(md)
@@ -668,8 +825,9 @@ settingsEventFrame:SetScript("OnEvent", function()
         if s.titleCaseSearch  == nil then s.titleCaseSearch  = true  end
         if s.maxPages         == nil then s.maxPages         = 3     end
         if s.exactMatch       == nil then s.exactMatch       = true  end
-        if s.retryDelay       == nil then s.retryDelay       = 500   end
+        if s.retryDelay       == nil then s.retryDelay       = 5000  end
         if s.maxRetries       == nil then s.maxRetries       = 2     end
+        if s.dataCacheHours   == nil then s.dataCacheHours   = 1     end
         if s.mailOpenDelay    == nil then s.mailOpenDelay    = 500   end
         if s.mailOpenRetries  == nil then s.mailOpenRetries  = 2     end
 
@@ -683,6 +841,7 @@ settingsEventFrame:SetScript("OnEvent", function()
         ORCTION_MAX_PAGES         = s.maxPages
         ORCTION_RETRY_DELAY       = s.retryDelay / 1000
         ORCTION_MAX_RETRIES       = s.maxRetries
+        ORCTION_DATA_CACHE_HOURS  = s.dataCacheHours
         ORCTION_MAIL_OPEN_DELAY   = s.mailOpenDelay / 1000
         ORCTION_MAIL_OPEN_RETRIES = s.mailOpenRetries
 

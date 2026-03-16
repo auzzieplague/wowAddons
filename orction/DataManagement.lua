@@ -22,6 +22,19 @@ local function OrctionData_GetPriceEntry(itemId, name)
     return entry
 end
 
+function OrctionData_ShouldRecord(itemId, name)
+    OrctionData_EnsureDB()
+    local key = itemId or ("name:" .. name)
+    local entry = OrctionDB.priceHistory[key]
+    if not entry then return true end
+    local cacheHours = ORCTION_DATA_CACHE_HOURS or 1
+    local cacheSeconds = cacheHours * 3600
+    if cacheSeconds <= 0 then return true end
+    local last = entry.lastRecorded
+    if not last then return true end
+    return (time() - last) >= cacheSeconds
+end
+
 -- Record a buyout price observation into the day slot rolling window.
 -- price is total buyout for the auction stack; count is stack size.
 function OrctionData_RecordScanPrice(itemId, name, price, count)
@@ -42,4 +55,5 @@ function OrctionData_RecordScanPrice(itemId, name, price, count)
         entry[pKey] = math.floor(total / newCount)
         entry[cKey] = newCount
     end
+    entry.lastRecorded = time()
 end

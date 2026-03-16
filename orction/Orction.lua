@@ -4,7 +4,7 @@ local orig_AuctionFrameTab_OnClick = nil
 local ORCTION_DURATION = 1440  -- 24 hours in minutes
 
 -- ── Search state ───────────────────────────────────────────────────────────
-local ORCTION_MAX_PAGES      = 3
+local ORCTION_MAX_PAGES      = 10
 local ORCTION_PAGE_SIZE      = 50
 local orctionSearchName      = nil
 local orctionSearchPage      = 0
@@ -25,6 +25,7 @@ local orctionPendingSellRead = false -- true when waiting for sell slot info aft
 local orctionSellPollElapsed = 0     -- seconds spent polling for sell slot info
 local orctionSearchClassIndex = 0    -- selected class index for search (0 = none)
 local orctionSearchSubIndex   = 0    -- selected subclass index for search (0 = none)
+local orctionUsableOnly       = false -- filter AH results to usable-by-player items
 local ORCTION_TOOLTIP_HOOKED = false
 local orctionLastTooltipLink = nil
 local orctionLastTooltipName = nil
@@ -43,8 +44,11 @@ local orctionScanItemStartCount = 0   -- orctionSimilarResults count at start of
 local orctionScanCancel        = false -- user requested scan cancel
 local orctionScanResultsShowing = false -- scan finished; keep showing all results without exact-match re-filtering
 local orctionQueryRetryCount   = 0    -- retries fired for the current query (rate-limit recovery)
-local ORCTION_RETRY_DELAY      = 0.5  -- seconds to wait before retrying an empty query (synced from DB)
+local ORCTION_RETRY_DELAY      = 5.0  -- seconds to wait before retrying an empty query (synced from DB)
 local ORCTION_MAX_RETRIES      = 2    -- maximum retries per query before giving up (synced from DB)
+local orctionSearchStartPage   = 0    -- first page of the current fetch batch
+local orctionNextStartPage     = 0    -- page to start from when "Next Page" is clicked
+local orctionHasMorePages      = false -- true when pagination stopped at ORCTION_MAX_PAGES, not at exhaustion
 
 -- ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -215,13 +219,15 @@ end
 local function Orction_Query(name, page)
     local classIdx = orctionSearchClassIndex
     local subIdx   = orctionSearchSubIndex
-    local p = page or 0
+    local p        = page or 0
+    local usable   = orctionUsableOnly and 1 or nil
+    local qname    = (name and string.len(name) > 0) and name or ""
     if classIdx and classIdx > 0 and subIdx and subIdx > 0 then
-        QueryAuctionItems(name, nil, nil, nil, classIdx, subIdx, p, nil, nil)
+        QueryAuctionItems(qname, nil, nil, nil, classIdx, subIdx, p, usable, nil)
     elseif classIdx and classIdx > 0 then
-        QueryAuctionItems(name, nil, nil, nil, classIdx, nil, p, nil, nil)
+        QueryAuctionItems(qname, nil, nil, nil, classIdx, nil, p, usable, nil)
     else
-        QueryAuctionItems(name, nil, nil, nil, nil, nil, p, nil, nil)
+        QueryAuctionItems(qname, nil, nil, nil, nil, nil, p, usable, nil)
     end
 end
 
@@ -344,6 +350,14 @@ end
 -- ── Search logic ──────────────────────────────────────────────────────────
 
 local function Orction_DisplayResults()
+    local nextPageBtn = getglobal("OrctionNextPageBtn")
+    if nextPageBtn then
+        if orctionHasMorePages then nextPageBtn:Enable()
+        else                        nextPageBtn:Disable() end
+    end
+    DEFAULT_CHAT_FRAME:AddMessage(
+        "Orction: DisplayResults — similar=" .. table.getn(orctionSimilarResults) ..
+        " exact=" .. table.getn(orctionSearchResults))
     local exactMode = not (OrctionExactMatchCheck and OrctionExactMatchCheck:GetChecked() == nil)
 
     -- Choose result set
@@ -441,19 +455,27 @@ local function Orction_DisplayResults()
             end
         end
         for _, v in pairs(cheapest) do
-            OrctionData_RecordScanPrice(v.itemId, v.name, v.costPerItem, 1)
+            if not OrctionData_ShouldRecord or OrctionData_ShouldRecord(v.itemId, v.name) then
+                OrctionData_RecordScanPrice(v.itemId, v.name, v.costPerItem, 1)
+            end
         end
     end
 
-    local scroll = getglobal("OrctionResultScroll")
-    if scroll then scroll:SetVerticalScroll(0) end
-
-    -- Pre-size the scroll child to exactly fit the visible rows so the scrollbar
-    -- range matches the actual content rather than always being MAX_ROWS tall.
+    -- Size both the scroll child and the scroll frame to fit content exactly,
+    -- capped at the maximum viewport height (~8.5 rows).
     local visibleCount = table.getn(groups)
-    if OrctionResultScrollChild and visibleCount > 0 then
-        local ROW_H = 37
-        OrctionResultScrollChild:SetHeight(visibleCount * ROW_H)
+    DEFAULT_CHAT_FRAME:AddMessage("Orction: groups=" .. visibleCount .. " (multiItem=" .. tostring(multiItem) .. ")")
+    local ROW_H_PX     = 37
+    local MAX_H        = 316
+    local contentH     = visibleCount * ROW_H_PX
+    if contentH < 1 then contentH = ROW_H_PX end
+    if OrctionResultScrollChild then
+        OrctionResultScrollChild:SetHeight(contentH)
+    end
+    local scroll = getglobal("OrctionResultScroll")
+    if scroll then
+        scroll:SetHeight(math.min(contentH, MAX_H))
+        scroll:SetVerticalScroll(0)
     end
 
     for i = 1, table.getn(orctionResultRows) do
@@ -507,7 +529,9 @@ local function Orction_CollectPage()
     orctionPageProcessed   = true
     orctionWaitTimeout     = 0  -- got real data, reset the timeout
     orctionQueryRetryCount = 0  -- successful response, clear retry counter
+    DEFAULT_CHAT_FRAME:AddMessage("Orction: page " .. orctionSearchPage .. " — batch=" .. batch .. " raw")
     Orction_UpdateSearchingText()
+    local pageAdded = 0
     for i = 1, batch do
         local name, texture, count, quality, canUse, level,
               minBid, minIncrement, buyoutPrice = GetAuctionItemInfo("list", i)
@@ -559,6 +583,7 @@ local function Orction_CollectPage()
             }
             -- Always collect into similar (all results)
             table.insert(orctionSimilarResults, entry)
+            pageAdded = pageAdded + 1
             -- Exact results only for name matches
             if name == orctionSearchName then
                 table.insert(orctionSearchResults, entry)
@@ -566,12 +591,24 @@ local function Orction_CollectPage()
         end
     end
 
-    local nextPage = orctionSearchPage + 1
-    if nextPage < ORCTION_MAX_PAGES and batch >= ORCTION_PAGE_SIZE then
+    DEFAULT_CHAT_FRAME:AddMessage(
+        "Orction: page " .. orctionSearchPage .. " — " .. pageAdded .. "/" .. batch ..
+        " with buyout, total=" .. table.getn(orctionSimilarResults))
+
+    local nextPage  = orctionSearchPage + 1
+    local pageLimit = orctionSearchStartPage + ORCTION_MAX_PAGES
+    if nextPage < pageLimit and batch > 0 then
         orctionSearchPage  = nextPage
+        DEFAULT_CHAT_FRAME:AddMessage("Orction: fetching page " .. nextPage .. "...")
         orctionSearchRetry = true   -- OnUpdate will fire the next query after a short delay
         orctionQueryDelay  = 0
     else
+        -- Stopped because we hit the page limit (more may exist) or ran out of results
+        orctionHasMorePages  = (batch > 0)
+        orctionNextStartPage = nextPage
+        DEFAULT_CHAT_FRAME:AddMessage(
+            "Orction: done — " .. table.getn(orctionSimilarResults) .. " total collected" ..
+            (orctionHasMorePages and ", more available" or "") .. ", displaying")
         orctionSearchActive = false
         if orctionScanMode then
             local found = table.getn(orctionSimilarResults) - orctionScanItemStartCount
@@ -600,6 +637,9 @@ local function Orction_StartSearch(name, classIndex, subIndex)
     orctionQueryDelay        = 0
     orctionWaitTimeout       = 0
     orctionResponseReceived  = false
+    orctionSearchStartPage   = 0
+    orctionNextStartPage     = 0
+    orctionHasMorePages      = false
     orctionSearchResults     = {}
     orctionSimilarResults    = {}
     orctionShowingSimilar = false
@@ -615,6 +655,25 @@ local function Orction_StartSearch(name, classIndex, subIndex)
     Orction_UpdateSearchingText()
     if OrctionNoResultsText  then OrctionNoResultsText:Hide()  end
     Orction_Query(name, 0)
+end
+
+function Orction_FetchNextPages()
+    if not orctionHasMorePages then return end
+    orctionHasMorePages     = false
+    orctionSearchActive     = true
+    orctionPageProcessed    = false
+    orctionSearchRetry      = false
+    orctionQueryDelay       = 0
+    orctionWaitTimeout      = 0
+    orctionResponseReceived = false
+    orctionSearchStartPage  = orctionNextStartPage
+    orctionSearchPage       = orctionNextStartPage
+    local btn = getglobal("OrctionNextPageBtn")
+    if btn then btn:Disable() end
+    if OrctionSearchingText then OrctionSearchingText:Show() end
+    Orction_UpdateSearchingText()
+    DEFAULT_CHAT_FRAME:AddMessage("Orction: fetching next " .. ORCTION_MAX_PAGES .. " pages from page " .. orctionNextStartPage .. "...")
+    Orction_Query(orctionSearchName, orctionNextStartPage)
 end
 
 local function Orction_TryBuy()
@@ -1024,14 +1083,17 @@ StaticPopupDialogs["ORCTION_STACK_CONFIRM"] = {
 local function Orction_DoTextSearch()
     if not OrctionSearchBox then return end
     local text = OrctionSearchBox:GetText()
-    if not text or string.len(text) == 0 then return end
-    if OrctionDB and OrctionDB.settings and OrctionDB.settings.titleCaseSearch then
-        local corrected = Orction_TitleCaseWords(text)
-        if corrected ~= text then
-            DEFAULT_CHAT_FRAME:AddMessage("Orction: Corrected to " .. corrected)
+    if text and string.len(text) > 0 then
+        if OrctionDB and OrctionDB.settings and OrctionDB.settings.titleCaseSearch then
+            local corrected = Orction_TitleCaseWords(text)
+            if corrected ~= text then
+                DEFAULT_CHAT_FRAME:AddMessage("Orction: Corrected to " .. corrected)
+            end
+            text = corrected
+            OrctionSearchBox:SetText(corrected)
         end
-        text = corrected
-        OrctionSearchBox:SetText(corrected)
+    else
+        text = ""  -- empty search: browse by category / usable filter only
     end
     orctionVendorPrice = Orction_GetVendorPrice(text)
     Orction_StartSearch(text, orctionSearchClassIndex, orctionSearchSubIndex)
@@ -1350,6 +1412,16 @@ local function Orction_BuildAHPanel()
 
     Orction_InitCategoryDropDown()
     Orction_InitSubcategoryDropDown()
+
+    local OrctionUsableCheck = CreateFrame("CheckButton", "OrctionUsableCheck", OrctionAHPanel, "OptionsCheckButtonTemplate")
+    OrctionUsableCheck:SetPoint("LEFT", OrctionSubcategoryDropDown, "RIGHT", 0, -2)
+    getglobal("OrctionUsableCheckText"):SetText("Usable")
+    OrctionUsableCheck:SetWidth(30)
+    OrctionUsableCheck:SetHitRectInsets(0, 5, 0, 0)
+    OrctionUsableCheck:SetChecked(nil)
+    OrctionUsableCheck:SetScript("OnClick", function()
+        orctionUsableOnly = not (this:GetChecked() == nil)
+    end)
 
     -- ── Left panel: absolute positions cloned from AuctionFrameAuctions children ─
     -- All SetPoint anchors are relative to OrctionAHPanel TOPLEFT (= AuctionFrame TOPLEFT).
@@ -1807,9 +1879,19 @@ local function Orction_BuildAHPanel()
     OrctionNoResultsText:Hide()
 
     OrctionSimilarResultsText = OrctionAHPanel:CreateFontString("OrctionSimilarResultsText", "OVERLAY", "GameFontHighlight")
-    OrctionSimilarResultsText:SetPoint("BOTTOM", scrollFrame, "TOP", 150, 28)
-    OrctionSimilarResultsText:SetText("|cFFFF9900 Missing some exact matches ( showing partials) |r")
+    OrctionSimilarResultsText:SetPoint("BOTTOM", scrollFrame, "TOP", 180, 28)
+    OrctionSimilarResultsText:SetText("|cFFFF9900 couldn't exact match everything |r")
     OrctionSimilarResultsText:Hide()
+
+    -- ── Next Page button (bottom-right of results area) ────────────────────
+
+    local nextPageBtn = CreateFrame("Button", "OrctionNextPageBtn", OrctionAHPanel, "UIPanelButtonTemplate")
+    nextPageBtn:SetWidth(100)
+    nextPageBtn:SetHeight(22)
+    nextPageBtn:SetPoint("BOTTOMRIGHT", scrollFrame, "BOTTOMRIGHT", 0, -26)
+    nextPageBtn:SetText("Next Page")
+    nextPageBtn:Disable()
+    nextPageBtn:SetScript("OnClick", Orction_FetchNextPages)
 
     -- ── Listen for item slot and search result changes ─────────────────────
 
