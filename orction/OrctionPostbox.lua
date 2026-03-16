@@ -32,6 +32,34 @@ local function OrctionPostal_MailHasItemOrMoney(i)
     return hasItem or hasMoney, COD
 end
 
+local function OrctionPostal_FindInboxItemButton(i)
+    local row = _G["InboxFrameItem" .. i]
+    if row then
+        return row.ItemButton or _G[row:GetName() .. "ItemButton"] or _G[row:GetName() .. "Button"]
+    end
+    return _G["InboxFrameItem" .. i .. "ItemButton"] or _G["InboxFrameItem" .. i .. "Button"]
+end
+
+local function OrctionPostal_UpdateInboxCounts()
+    local num = GetInboxNumItems()
+    for i = 1, num do
+        local btn = OrctionPostal_FindInboxItemButton(i)
+        if btn then
+            if not btn.orctionCountText then
+                btn.orctionCountText = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                btn.orctionCountText:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", -2, 2)
+            end
+            local _, _, count = GetInboxItem(i)
+            if count and count > 1 then
+                btn.orctionCountText:SetText(count)
+                btn.orctionCountText:Show()
+            else
+                btn.orctionCountText:Hide()
+            end
+        end
+    end
+end
+
 local function OrctionPostal_FindNextMail()
     local num = GetInboxNumItems()
     for i = 1, num do
@@ -89,6 +117,7 @@ local function OrctionPostal_UpdateButtons()
             end
         end
     end
+    OrctionPostal_UpdateInboxCounts()
 end
 
 -- ── Open-all loop ─────────────────────────────────────────────────────────

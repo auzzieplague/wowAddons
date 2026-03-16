@@ -16,6 +16,7 @@ local orctionPageProcessed   = false -- true after first non-zero AUCTION_ITEM_L
 local orctionSearchRetry     = false -- true when waiting to query the next page
 local orctionQueryDelay      = 0     -- seconds accumulated since retry was flagged
 local orctionWaitTimeout     = 0     -- seconds waiting for non-zero batch on current page
+local orctionResponseReceived = false -- true once AUCTION_ITEM_LIST_UPDATE has fired for this query
 local orctionPendingPost     = nil   -- { name, startBid, buyout, count, stacksLeft, totalStacks }
 local orctionPendingDrop     = nil   -- { name, texture, count } while confirm dialog is open
 local orctionVendorPrice     = nil   -- vendor sell price (copper) for the current search item
@@ -68,21 +69,21 @@ end
 -- Without gold: show [Ys] [Zc], omit zero-value parts.
 local function FormatMoneyColour(copper)
     if not copper or copper <= 0 then
-        return "|cFFB87333" .. "0 |r"
+        return "|cFFB87333" .. "0c|r"
     end
     local g = math.floor(copper / 10000)
     local s = math.floor(math.mod(copper, 10000) / 100)
     local c = math.mod(copper, 100)
     if g > 0 then
         local str = "|cFFFFD700" .. g .. "g |r"
-        if s > 0 then str = str .. "|cFFC0C0C0" .. s .. " |r" end
+        if s > 0 then str = str .. "|cFFC0C0C0" .. s .. "s|r" end
         return str
     elseif s > 0 then
-        local str = "|cFFC0C0C0" .. s .. " |r"
-        if c > 0 then str = str .. "|cFFB87333" .. c .. " |r" end
+        local str = "|cFFC0C0C0" .. s .. "s|r"
+        if c > 0 then str = str .. "|cFFB87333" .. c .. "c|r" end
         return str
     else
-        return "|cFFB87333" .. c .. " |r"
+        return "|cFFB87333" .. c .. "c|r"
     end
 end
 
@@ -429,8 +430,8 @@ local function Orction_DisplayResults()
         MoneyInputFrame_SetCopper(OrctionBuyout, groups[1].costPerItem * count)
     end
 
-    -- Record cheapest per-item price for each item during scans
-    if orctionScanMode and OrctionData_RecordScanPrice then
+    -- Record cheapest per-item price for each item during scans or regular searches
+    if OrctionData_RecordScanPrice and (orctionScanMode or orctionSearchActive) then
         local cheapest = {}
         for _, item in ipairs(results) do
             local k = item.itemId or ("name:" .. (item.name or ""))
@@ -493,9 +494,12 @@ local function Orction_CollectPage()
 
     local batch = GetNumAuctionItems("list")
 
+    orctionResponseReceived = true  -- server acknowledged this query (even if empty)
+
     if batch == 0 then
         -- Blizzard fires a batch=0 event before large result sets are ready on ANY page.
-        -- Always wait; the OnUpdate timeout will give up if no data ever arrives.
+        -- orctionResponseReceived is now set, so the timeout will treat a persistent
+        -- batch=0 as "genuine no results" rather than rate-limiting.
         return
     end
 
@@ -590,13 +594,14 @@ local function Orction_StartSearch(name, classIndex, subIndex)
     orctionQueryRetryCount    = 0
     orctionSearchName    = name
     orctionSearchPage    = 0
-    orctionSearchActive  = true
-    orctionPageProcessed = false
-    orctionSearchRetry   = false
-    orctionQueryDelay    = 0
-    orctionWaitTimeout   = 0
-    orctionSearchResults = {}
-    orctionSimilarResults = {}
+    orctionSearchActive      = true
+    orctionPageProcessed     = false
+    orctionSearchRetry       = false
+    orctionQueryDelay        = 0
+    orctionWaitTimeout       = 0
+    orctionResponseReceived  = false
+    orctionSearchResults     = {}
+    orctionSimilarResults    = {}
     orctionShowingSimilar = false
     orctionVendorCache   = {}
     orctionVendorPrice   = (OrctionDB and OrctionDB.vendorPrices and OrctionDB.vendorPrices[name]) or 0
@@ -1131,6 +1136,7 @@ local function Orction_ScanNext()
     orctionSearchRetry       = false
     orctionQueryDelay        = 0
     orctionWaitTimeout       = 0
+    orctionResponseReceived  = false
     orctionQueryRetryCount   = 0
     orctionScanItemStartCount = table.getn(orctionSimilarResults)
     if OrctionSearchingText then
@@ -1209,17 +1215,21 @@ local function Orction_AHPanel_OnUpdate()
         -- Rate-limit retries use ORCTION_RETRY_DELAY; page pagination uses 0.3s
         local threshold = (orctionQueryRetryCount > 0) and ORCTION_RETRY_DELAY or 0.3
         if orctionQueryDelay >= threshold then
-            orctionSearchRetry   = false
-            orctionPageProcessed = false
-            orctionWaitTimeout   = 0
-            orctionQueryDelay    = 0
+            orctionSearchRetry      = false
+            orctionPageProcessed    = false
+            orctionResponseReceived = false
+            orctionWaitTimeout      = 0
+            orctionQueryDelay       = 0
             Orction_Query(orctionSearchName, orctionSearchPage)
         end
     elseif orctionSearchActive then
         orctionWaitTimeout = orctionWaitTimeout + arg1
-        if orctionWaitTimeout >= 3.0 then
-            if orctionQueryRetryCount < ORCTION_MAX_RETRIES then
-                -- Rate-limit recovery: retry the same query after the configured delay
+        -- Use a short window if the server already responded with batch=0 (genuine no results).
+        -- Use the full 3s only when no response has arrived at all (rate limited / queued).
+        local waitLimit = orctionResponseReceived and 0.8 or 3.0
+        if orctionWaitTimeout >= waitLimit then
+            if not orctionResponseReceived and orctionQueryRetryCount < ORCTION_MAX_RETRIES then
+                -- No response at all → likely rate limited, retry
                 orctionQueryRetryCount = orctionQueryRetryCount + 1
                 orctionPageProcessed   = false
                 orctionWaitTimeout     = 0
@@ -1229,12 +1239,14 @@ local function Orction_AHPanel_OnUpdate()
                 orctionSearchRetry = true   -- OnUpdate will re-fire QueryAuctionItems
                 orctionQueryDelay  = 0      -- rate-limit path uses ORCTION_RETRY_DELAY threshold
             else
-                orctionSearchActive    = false
-                orctionQueryRetryCount = 0
+                -- Either server replied with 0 results, or retries exhausted → advance
+                orctionSearchActive      = false
+                orctionQueryRetryCount   = 0
+                orctionResponseReceived  = false
                 if orctionScanMode then
                     local found = table.getn(orctionSimilarResults) - orctionScanItemStartCount
                     DEFAULT_CHAT_FRAME:AddMessage(
-                        "Orction: " .. (orctionSearchName or "?") .. " — timed out (" .. found .. " results)")
+                        "Orction: " .. (orctionSearchName or "?") .. " — " .. found .. " results")
                     orctionScanNextPending = true
                     orctionScanNextDelay   = 0
                 else
@@ -1796,7 +1808,7 @@ local function Orction_BuildAHPanel()
 
     OrctionSimilarResultsText = OrctionAHPanel:CreateFontString("OrctionSimilarResultsText", "OVERLAY", "GameFontHighlight")
     OrctionSimilarResultsText:SetPoint("BOTTOM", scrollFrame, "TOP", 150, 28)
-    OrctionSimilarResultsText:SetText("|cFFFF9900No Missing some exact matches ( showing partials) |r")
+    OrctionSimilarResultsText:SetText("|cFFFF9900 Missing some exact matches ( showing partials) |r")
     OrctionSimilarResultsText:Hide()
 
     -- ── Listen for item slot and search result changes ─────────────────────
