@@ -40,6 +40,7 @@ local orctionScanNextPending   = false -- waiting for inter-item delay before ne
 local orctionScanNextDelay     = 0    -- seconds accumulated toward next scan item
 local orctionScanItemStartCount = 0   -- orctionSimilarResults count at start of current scan item
 local orctionScanCancel        = false -- user requested scan cancel
+local orctionScanResultsShowing = false -- scan finished; keep showing all results without exact-match re-filtering
 local orctionQueryRetryCount   = 0    -- retries fired for the current query (rate-limit recovery)
 local ORCTION_RETRY_DELAY      = 0.5  -- seconds to wait before retrying an empty query (synced from DB)
 local ORCTION_MAX_RETRIES      = 2    -- maximum retries per query before giving up (synced from DB)
@@ -324,9 +325,12 @@ local function Orction_DisplayResults()
     -- Choose result set
     local results
     orctionShowingSimilar = false
-    if orctionScanMode then
-        -- Scan: show everything accumulated across all watchlist items
+    if orctionScanMode or orctionScanResultsShowing then
+        -- Scan in progress or scan results being displayed: show all accumulated items,
+        -- flag as "showing similar" if the similar set is larger than the exact set
+        -- (i.e. non-exact-match results are present).
         results = orctionSimilarResults
+        orctionShowingSimilar = table.getn(orctionSimilarResults) > table.getn(orctionSearchResults)
     elseif exactMode then
         if table.getn(orctionSearchResults) > 0 then
             results = orctionSearchResults
@@ -547,11 +551,12 @@ local function Orction_CollectPage()
 end
 
 local function Orction_StartSearch(name, classIndex, subIndex)
-    -- Cancel any active scan
-    orctionScanMode          = false
-    orctionScanQueue         = nil
-    orctionScanNextPending   = false
-    orctionQueryRetryCount   = 0
+    -- Cancel any active scan / clear scan results display
+    orctionScanMode           = false
+    orctionScanResultsShowing = false
+    orctionScanQueue          = nil
+    orctionScanNextPending    = false
+    orctionQueryRetryCount    = 0
     orctionSearchName    = name
     orctionSearchPage    = 0
     orctionSearchActive  = true
@@ -1074,6 +1079,7 @@ local function Orction_ScanNext()
     if orctionScanIndex > total then
         -- All items scanned — display accumulated results
         if OrctionSearchingText then OrctionSearchingText:Hide() end
+        orctionScanResultsShowing = true
         Orction_DisplayResults()
         orctionScanMode  = false
         orctionScanQueue = nil
@@ -1111,7 +1117,8 @@ local function Orction_StartScan()
         DEFAULT_CHAT_FRAME:AddMessage("Orction: watchlist is empty")
         return
     end
-    orctionScanCancel     = false
+    orctionScanCancel          = false
+    orctionScanResultsShowing  = false
     orctionSearchResults  = {}
     orctionSimilarResults = {}
     orctionVendorCache    = {}
@@ -1130,9 +1137,10 @@ end
 
 local function Orction_AHPanel_OnUpdate()
     if orctionScanCancel then
-        orctionScanCancel     = false
-        orctionScanMode       = false
-        orctionScanQueue      = nil
+        orctionScanCancel          = false
+        orctionScanMode            = false
+        orctionScanResultsShowing  = false
+        orctionScanQueue           = nil
         orctionScanNextPending = false
         orctionScanNextDelay   = 0
         orctionSearchActive    = false
@@ -1748,7 +1756,7 @@ local function Orction_BuildAHPanel()
 
     OrctionSimilarResultsText = OrctionAHPanel:CreateFontString("OrctionSimilarResultsText", "OVERLAY", "GameFontHighlight")
     OrctionSimilarResultsText:SetPoint("BOTTOM", scrollFrame, "TOP", 150, 28)
-    OrctionSimilarResultsText:SetText("|cFFFF9900No Exact Matches! Showing similar...|r")
+    OrctionSimilarResultsText:SetText("|cFFFF9900No Missing some exact matches ( showing partials) |r")
     OrctionSimilarResultsText:Hide()
 
     -- ── Listen for item slot and search result changes ─────────────────────

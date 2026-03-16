@@ -77,21 +77,22 @@ end
 local auctionPanel    = CreateContentPanel("OrctionAuctionPanel")
 local postPanel       = CreateContentPanel("OrctionPostPanel")
 local inventoryPanel  = CreateContentPanel("OrctionInventoryPanel")
+local dataPanel       = CreateContentPanel("OrctionDataPanel")
 local creditsPanel    = CreateContentPanel("OrctionCreditsPanel")
 
 -- Table for easy indexed access
-local orctionPanels = { auctionPanel, postPanel, inventoryPanel, creditsPanel }
+local orctionPanels = { auctionPanel, postPanel, inventoryPanel, dataPanel, creditsPanel }
 
 -------------------------------------------------------------------------------
 -- Tab buttons
 -------------------------------------------------------------------------------
 
-local tabLabels = { "Auction", "Post", "Inventory", "Credits" }
+local tabLabels = { "Auction", "Post", "Inventory", "Data", "Credits" }
 
-OrctionFrame.numTabs = 4
-PanelTemplates_SetNumTabs(OrctionFrame, 4)
+OrctionFrame.numTabs = 5
+PanelTemplates_SetNumTabs(OrctionFrame, 5)
 
-for i = 1, 4 do
+for i = 1, 5 do
     local tab = CreateFrame("Button", "OrctionFrameTab"..i, OrctionFrame, "CharacterFrameTabButtonTemplate")
     tab:SetID(i)
     tab:SetText(tabLabels[i])
@@ -119,7 +120,7 @@ end
 
 function OrctionSettings_SelectTab(id)
     -- Hide all panels
-    for i = 1, 4 do
+    for i = 1, 5 do
         orctionPanels[i]:Hide()
     end
     -- Show the selected panel
@@ -364,7 +365,190 @@ tooltipEnabledCheck:SetScript("OnClick", function()
 end)
 
 -------------------------------------------------------------------------------
--- TAB 4: Credits
+-- TAB 4: Data
+-------------------------------------------------------------------------------
+
+local dataSearchText = ""
+local dataPage = 1
+local dataPageSize = 10
+local dataRows = {}
+
+local function OrctionSettings_GetDaySlot()
+    local day = tonumber(date("%j")) or 1
+    return math.mod(day, 7) + 1
+end
+
+local function OrctionSettings_GetDataKeys()
+    local keys = {}
+    if OrctionDB and OrctionDB.priceHistory then
+        for k, v in pairs(OrctionDB.priceHistory) do
+            local name = v and v.name or ""
+            if dataSearchText == "" or string.find(string.lower(name), string.lower(dataSearchText), 1, true) then
+                table.insert(keys, k)
+            end
+        end
+    end
+    table.sort(keys)
+    return keys
+end
+
+local function OrctionSettings_RefreshData()
+    local keys = OrctionSettings_GetDataKeys()
+    local total = table.getn(keys)
+    local maxPage = math.max(1, math.ceil(total / dataPageSize))
+    if dataPage > maxPage then dataPage = maxPage end
+    if dataPage < 1 then dataPage = 1 end
+
+    local startIdx = (dataPage - 1) * dataPageSize + 1
+    local slot = OrctionSettings_GetDaySlot()
+
+    for i = 1, dataPageSize do
+        local row = dataRows[i]
+        local idx = startIdx + i - 1
+        if row and idx <= total then
+            local key = keys[idx]
+            local entry = OrctionDB.priceHistory[key]
+            local pKey = "day" .. slot .. "Price"
+            local cKey = "day" .. slot .. "Count"
+            row.name:SetText(entry.name or "")
+            row.key:SetText(key)
+            row.price:SetText(tostring(entry[pKey] or 0))
+            row.count:SetText(tostring(entry[cKey] or 0))
+            row.frame:Show()
+        elseif row then
+            row.frame:Hide()
+        end
+    end
+
+    if OrctionDataPageText then
+        OrctionDataPageText:SetText("Page " .. dataPage .. " / " .. maxPage)
+    end
+end
+
+local dataSearchBox = CreateFrame("EditBox", "OrctionDataSearchBox", dataPanel, "InputBoxTemplate")
+dataSearchBox:SetWidth(180)
+dataSearchBox:SetHeight(22)
+dataSearchBox:SetPoint("TOPLEFT", dataPanel, "TOPLEFT", 10, -10)
+dataSearchBox:SetAutoFocus(false)
+dataSearchBox:SetScript("OnEnterPressed", function()
+    dataSearchText = this:GetText() or ""
+    dataPage = 1
+    OrctionSettings_RefreshData()
+    this:ClearFocus()
+end)
+
+local dataSearchBtn = CreateFrame("Button", nil, dataPanel, "UIPanelButtonTemplate")
+dataSearchBtn:SetWidth(60)
+dataSearchBtn:SetHeight(22)
+dataSearchBtn:SetPoint("LEFT", dataSearchBox, "RIGHT", 6, 0)
+dataSearchBtn:SetText("Search")
+dataSearchBtn:SetScript("OnClick", function()
+    dataSearchText = dataSearchBox:GetText() or ""
+    dataPage = 1
+    OrctionSettings_RefreshData()
+end)
+
+local purgeBtn = CreateFrame("Button", nil, dataPanel, "UIPanelButtonTemplate")
+purgeBtn:SetWidth(90)
+purgeBtn:SetHeight(22)
+purgeBtn:SetPoint("LEFT", dataSearchBtn, "RIGHT", 6, 0)
+purgeBtn:SetText("Purge Data")
+purgeBtn:SetScript("OnClick", function()
+    if OrctionDB then OrctionDB.priceHistory = {} end
+    OrctionSettings_RefreshData()
+end)
+
+local analyzeBtn = CreateFrame("Button", nil, dataPanel, "UIPanelButtonTemplate")
+analyzeBtn:SetWidth(90)
+analyzeBtn:SetHeight(22)
+analyzeBtn:SetPoint("LEFT", purgeBtn, "RIGHT", 6, 0)
+analyzeBtn:SetText("Analyze")
+analyzeBtn:SetScript("OnClick", function()
+    DEFAULT_CHAT_FRAME:AddMessage("Orction: analyze data not implemented")
+end)
+
+local headerName = dataPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+headerName:SetPoint("TOPLEFT", dataPanel, "TOPLEFT", 10, -42)
+headerName:SetText("Name")
+
+local headerKey = dataPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+headerKey:SetPoint("LEFT", headerName, "RIGHT", 160, 0)
+headerKey:SetText("Key")
+
+local headerPrice = dataPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+headerPrice:SetPoint("LEFT", headerKey, "RIGHT", 140, 0)
+headerPrice:SetText("Day Price")
+
+local headerCount = dataPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+headerCount:SetPoint("LEFT", headerPrice, "RIGHT", 60, 0)
+headerCount:SetText("Count")
+
+local rowsFrame = CreateFrame("Frame", nil, dataPanel)
+rowsFrame:SetWidth(480)
+rowsFrame:SetHeight(240)
+rowsFrame:SetPoint("TOPLEFT", dataPanel, "TOPLEFT", 10, -60)
+
+for i = 1, dataPageSize do
+    local row = CreateFrame("Frame", nil, rowsFrame)
+    row:SetWidth(480)
+    row:SetHeight(20)
+    row:SetPoint("TOPLEFT", rowsFrame, "TOPLEFT", 0, -(i - 1) * 20)
+
+    local name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    name:SetPoint("LEFT", row, "LEFT", 0, 0)
+    name:SetWidth(150)
+    name:SetJustifyH("LEFT")
+
+    local key = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    key:SetPoint("LEFT", name, "RIGHT", 10, 0)
+    key:SetWidth(130)
+    key:SetJustifyH("LEFT")
+
+    local price = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    price:SetPoint("LEFT", key, "RIGHT", 10, 0)
+    price:SetWidth(60)
+    price:SetJustifyH("RIGHT")
+
+    local count = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    count:SetPoint("LEFT", price, "RIGHT", 10, 0)
+    count:SetWidth(40)
+    count:SetJustifyH("RIGHT")
+
+    row.name = name
+    row.key = key
+    row.price = price
+    row.count = count
+    row.frame = row
+    row:Hide()
+    dataRows[i] = row
+end
+
+local prevBtn = CreateFrame("Button", nil, dataPanel, "UIPanelButtonTemplate")
+prevBtn:SetWidth(60)
+prevBtn:SetHeight(20)
+prevBtn:SetPoint("TOPLEFT", rowsFrame, "BOTTOMLEFT", 0, -8)
+prevBtn:SetText("Prev")
+prevBtn:SetScript("OnClick", function()
+    dataPage = dataPage - 1
+    OrctionSettings_RefreshData()
+end)
+
+local nextBtn = CreateFrame("Button", nil, dataPanel, "UIPanelButtonTemplate")
+nextBtn:SetWidth(60)
+nextBtn:SetHeight(20)
+nextBtn:SetPoint("LEFT", prevBtn, "RIGHT", 6, 0)
+nextBtn:SetText("Next")
+nextBtn:SetScript("OnClick", function()
+    dataPage = dataPage + 1
+    OrctionSettings_RefreshData()
+end)
+
+OrctionDataPageText = dataPanel:CreateFontString("OrctionDataPageText", "OVERLAY", "GameFontHighlightSmall")
+OrctionDataPageText:SetPoint("LEFT", nextBtn, "RIGHT", 10, 0)
+OrctionDataPageText:SetText("Page 1 / 1")
+
+-------------------------------------------------------------------------------
+-- TAB 5: Credits
 -------------------------------------------------------------------------------
 
 local creditsLine1 = creditsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -436,6 +620,7 @@ end
 
 OrctionFrame:SetScript("OnShow", function()
     OrctionSettings_ApplyToUI()
+    OrctionSettings_RefreshData()
 end)
 
 -------------------------------------------------------------------------------
