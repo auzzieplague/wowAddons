@@ -75,4 +75,50 @@ function OrctionData_RecordScanPrice(itemId, name, price, count)
         entry[cKey] = newCount
     end
     entry.lastRecorded = time()
+
+    if not OrctionSync_IsApplying and OrctionSync_QueueItem then
+        OrctionSync_QueueItem(itemId, name)
+    end
+end
+
+-- Merge an incoming entry from addon sync into the local history.
+function OrctionData_MergeEntry(inEntry)
+    if not inEntry then return end
+    OrctionData_EnsureDB()
+
+    local name = inEntry.name or ""
+    local itemId = tonumber(inEntry.itemId or 0) or 0
+    local key = (itemId > 0) and itemId or ("name:" .. name)
+    local entry = OrctionDB.priceHistory[key]
+    if not entry then
+        entry = { itemId = itemId, name = name }
+        OrctionDB.priceHistory[key] = entry
+    end
+
+    if entry.name == "" and name ~= "" then entry.name = name end
+    if (entry.itemId == 0 or not entry.itemId) and itemId > 0 then entry.itemId = itemId end
+
+    for d = 1, 7 do
+        local pKey = "day" .. d .. "Price"
+        local cKey = "day" .. d .. "Count"
+        local incPrice = tonumber(inEntry[pKey] or 0) or 0
+        local incCount = tonumber(inEntry[cKey] or 0) or 0
+        if incPrice > 0 and incCount > 0 then
+            local oldPrice = entry[pKey] or 0
+            local oldCount = entry[cKey] or 0
+            local total = (oldPrice * oldCount) + (incPrice * incCount)
+            local newCount = oldCount + incCount
+            if newCount > 0 then
+                entry[pKey] = math.floor(total / newCount)
+                entry[cKey] = newCount
+            end
+        end
+    end
+
+    local incLast = tonumber(inEntry.lastRecorded or 0) or 0
+    if incLast > 0 then
+        if not entry.lastRecorded or incLast > entry.lastRecorded then
+            entry.lastRecorded = incLast
+        end
+    end
 end

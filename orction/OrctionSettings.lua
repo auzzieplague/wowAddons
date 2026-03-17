@@ -551,6 +551,44 @@ dataOffsetSlider:SetScript("OnValueChanged", function()
     end
 end)
 
+local syncCheck = CreateFrame("CheckButton", "OrctionSyncEnabledCheck", dataPanel, "UICheckButtonTemplate")
+syncCheck:SetPoint("LEFT", dataOffsetValueText, "RIGHT", 16, 0)
+local syncCheckText = getglobal("OrctionSyncEnabledCheckText")
+syncCheckText:SetText("Sync Data")
+syncCheck:SetScript("OnClick", function()
+    local enabled = (this:GetChecked() == 1)
+    ORCTION_SYNC_ENABLED = enabled and 1 or 0
+    if OrctionDB and OrctionDB.settings then
+        OrctionDB.settings.syncEnabled = enabled
+    end
+    if OrctionSync_SetEnabled then OrctionSync_SetEnabled(enabled) end
+    if OrctionSyncChannelButton then
+        if enabled then OrctionSyncChannelButton:Enable() else OrctionSyncChannelButton:Disable() end
+    end
+end)
+
+local syncChannelBtn = CreateFrame("Button", "OrctionSyncChannelButton", dataPanel, "UIPanelButtonTemplate")
+syncChannelBtn:SetWidth(110)
+syncChannelBtn:SetHeight(20)
+syncChannelBtn:SetPoint("LEFT", syncCheckText, "RIGHT", 8, 0)
+syncChannelBtn:SetText("Channel: GUILD")
+
+local syncChannels = { "GUILD", "PARTY", "RAID" }
+syncChannelBtn:SetScript("OnClick", function()
+    local cur = (OrctionDB and OrctionDB.settings and OrctionDB.settings.syncChannel) or "GUILD"
+    local idx = 1
+    for i = 1, table.getn(syncChannels) do
+        if syncChannels[i] == cur then idx = i end
+    end
+    local next = syncChannels[(idx % table.getn(syncChannels)) + 1]
+    if OrctionDB and OrctionDB.settings then
+        OrctionDB.settings.syncChannel = next
+    end
+    ORCTION_SYNC_CHANNEL = next
+    if OrctionSync_SetChannel then OrctionSync_SetChannel(next) end
+    syncChannelBtn:SetText("Channel: " .. next)
+end)
+
 local purgeBtn = CreateFrame("Button", nil, dataPanel, "UIPanelButtonTemplate")
 purgeBtn:SetWidth(90)
 purgeBtn:SetHeight(22)
@@ -865,6 +903,12 @@ local function OrctionSettings_ApplyToUI()
     dataOffsetSlider:SetValue(off)
     dataOffsetValueText:SetText(tostring(off))
 
+    local syncEnabled = s.syncEnabled
+    if syncEnabled then OrctionSyncEnabledCheck:SetChecked(1) else OrctionSyncEnabledCheck:SetChecked(nil) end
+    local syncChannel = s.syncChannel or "GUILD"
+    OrctionSyncChannelButton:SetText("Channel: " .. syncChannel)
+    if syncEnabled then OrctionSyncChannelButton:Enable() else OrctionSyncChannelButton:Disable() end
+
     local vm = s.vendorMultiplier or 5.0
     vendorMultSlider:SetValue(vm)
     vendorMultValueText:SetText(vm .. "x")
@@ -918,6 +962,8 @@ settingsEventFrame:SetScript("OnEvent", function()
         if s.mailOpenRetries  == nil then s.mailOpenRetries  = 2     end
         if s.vendorMultiplier == nil then s.vendorMultiplier = 5.0   end
         if s.auctionDuration  == nil then s.auctionDuration  = 2     end
+        if s.syncEnabled      == nil then s.syncEnabled      = true  end
+        if s.syncChannel      == nil then s.syncChannel      = "GUILD" end
 
         -- Sync exact match checkbox
         if OrctionExactMatchCheck then
@@ -935,6 +981,8 @@ settingsEventFrame:SetScript("OnEvent", function()
         ORCTION_MAIL_OPEN_RETRIES = s.mailOpenRetries
         ORCTION_VENDOR_MULTIPLIER = s.vendorMultiplier
         ORCTION_AUCTION_DURATION  = s.auctionDuration
+        ORCTION_SYNC_ENABLED      = s.syncEnabled and 1 or 0
+        ORCTION_SYNC_CHANNEL      = s.syncChannel
 
         -- Ensure persistent tables exist
         if not OrctionDB.vendorPrices then OrctionDB.vendorPrices = {} end

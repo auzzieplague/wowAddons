@@ -46,6 +46,8 @@ local orctionScanNextDelay     = 0    -- seconds accumulated toward next scan it
 local orctionScanItemStartCount = 0   -- orctionSimilarResults count at start of current scan item
 local orctionScanCancel        = false -- user requested scan cancel
 local orctionScanResultsShowing = false -- scan finished; keep showing all results without exact-match re-filtering
+local orctionFullScanActive       = false  -- category full-scan is fetching pages
+local orctionFullScanResultsShowing = false  -- category full-scan done; showing vendor-below results
 local orctionQueryRetryCount   = 0    -- retries fired for the current query (rate-limit recovery)
 local ORCTION_RETRY_DELAY      = 5.0  -- seconds to wait before retrying an empty query (synced from DB)
 local ORCTION_MAX_RETRIES      = 2    -- maximum retries per query before giving up (synced from DB)
@@ -158,8 +160,11 @@ end
 local function Orction_UpdateSearchingText()
     if not OrctionSearchingText then return end
     local page = (orctionSearchPage or 0) + 1
-    local total = ORCTION_MAX_PAGES or 1
-    OrctionSearchingText:SetText("Searching... Page " .. page .. "/" .. total)
+    if orctionFullScanActive then
+        OrctionSearchingText:SetText("Scanning page " .. page .. "...")
+    else
+        OrctionSearchingText:SetText("Searching page " .. page .. "...")
+    end
 end
 
 local function Orction_GetClassName(index)
@@ -616,6 +621,17 @@ local function Orction_DisplayResults()
     end
     table.sort(groups, function(a, b) return a.costPerItem < b.costPerItem end)
 
+    -- Full category scan: only retain items whose price is below their vendor sell value
+    if orctionFullScanActive or orctionFullScanResultsShowing then
+        local filtered = {}
+        for _, g in ipairs(groups) do
+            if g.vendorPrice and g.vendorPrice > 0 and g.costPerItem < g.vendorPrice then
+                table.insert(filtered, g)
+            end
+        end
+        groups = filtered
+    end
+
     if OrctionSearchingText then OrctionSearchingText:Hide() end
 
     if OrctionSimilarResultsText then
@@ -802,18 +818,31 @@ local function Orction_CollectPage()
 
     local nextPage  = orctionSearchPage + 1
     local pageLimit = orctionSearchStartPage + ORCTION_MAX_PAGES
-    if nextPage < pageLimit and batch > 0 then
+    local underLimit = orctionFullScanActive or (nextPage < pageLimit)
+    if underLimit and batch > 0 then
         orctionSearchPage  = nextPage
         orctionSearchRetry = true   -- OnUpdate will fire the next query after a short delay
         orctionQueryDelay  = 0
     else
-        -- Stopped because we hit the page limit (more may exist) or ran out of results
-        orctionHasMorePages  = (batch > 0)
+        -- Stopped because we hit the page limit, ran out of results, or full scan exhausted
+        orctionHasMorePages  = (batch > 0) and not orctionFullScanActive
         orctionNextStartPage = nextPage
-        orctionSearchActive = false
+        orctionSearchActive  = false
         if orctionScanMode then
             orctionScanNextPending = true
             orctionScanNextDelay   = 0
+        elseif orctionFullScanActive then
+            orctionFullScanActive         = false
+            orctionFullScanResultsShowing = true
+            Orction_DisplayResults()
+            local below = 0
+            for _, r in ipairs(orctionSimilarResults) do
+                if r.vendorPrice and r.vendorPrice > 0 and r.costPerItem < r.vendorPrice then
+                    below = below + 1
+                end
+            end
+            DEFAULT_CHAT_FRAME:AddMessage(
+                "Orction: scan complete — " .. below .. " auctions below vendor price")
         else
             Orction_DisplayResults()
         end
@@ -822,10 +851,12 @@ end
 
 local function Orction_StartSearch(name, classIndex, subIndex)
     -- Cancel any active scan / clear scan results display
-    orctionScanMode           = false
-    orctionScanResultsShowing = false
-    orctionScanQueue          = nil
-    orctionScanNextPending    = false
+    orctionScanMode               = false
+    orctionScanResultsShowing     = false
+    orctionScanQueue              = nil
+    orctionScanNextPending        = false
+    orctionFullScanActive         = false
+    orctionFullScanResultsShowing = false
     orctionQueryRetryCount    = 0
     orctionSearchName    = name
     orctionSearchPage    = 0
@@ -1518,21 +1549,61 @@ local function Orction_StartScan()
     Orction_ScanNext()
 end
 
+local function Orction_StartFullScan()
+    -- Full category scan: no page limit, uses active category dropdowns,
+    -- records all prices to history, shows only results below vendor cost.
+    orctionScanCancel             = false
+    orctionScanMode               = false
+    orctionScanResultsShowing     = false
+    orctionScanQueue              = nil
+    orctionScanNextPending        = false
+    orctionFullScanActive         = true
+    orctionFullScanResultsShowing = false
+    orctionSearchName             = ""
+    orctionSearchPage             = 0
+    orctionSearchActive           = true
+    orctionPageProcessed          = false
+    orctionSearchRetry            = false
+    orctionQueryDelay             = 0
+    orctionWaitTimeout            = 0
+    orctionResponseReceived       = false
+    orctionSearchStartPage        = 0
+    orctionNextStartPage          = 0
+    orctionHasMorePages           = false
+    orctionQueryRetryCount        = 0
+    orctionSearchResults          = {}
+    orctionSimilarResults         = {}
+    orctionVendorCache            = {}
+    orctionPriceWriteQueue        = {}
+    orctionSearchRecorded         = {}
+    for i = 1, table.getn(orctionResultRows) do
+        orctionResultRows[i].frame:Hide()
+    end
+    if OrctionNoResultsText      then OrctionNoResultsText:Hide()      end
+    if OrctionSimilarResultsText then OrctionSimilarResultsText:Hide() end
+    if OrctionSearchingText      then OrctionSearchingText:Show()      end
+    Orction_UpdateSearchingText()
+    Orction_SetSearchCategory(orctionSearchClassIndex, orctionSearchSubIndex)
+    Orction_Query("", 0)
+end
+
 -- ── OnUpdate handler (module-level to avoid adding upvalues to BuildAHPanel) ──
 
 local function Orction_AHPanel_OnUpdate()
     if orctionScanCancel then
-        orctionScanCancel          = false
-        orctionScanMode            = false
-        orctionScanResultsShowing  = false
-        orctionScanQueue           = nil
-        orctionScanNextPending = false
-        orctionScanNextDelay   = 0
-        orctionSearchActive    = false
-        orctionSearchRetry     = false
-        orctionQueryRetryCount = 0
-        orctionQueryDelay      = 0
-        orctionWaitTimeout     = 0
+        orctionScanCancel             = false
+        orctionScanMode               = false
+        orctionScanResultsShowing     = false
+        orctionScanQueue              = nil
+        orctionScanNextPending        = false
+        orctionScanNextDelay          = 0
+        orctionFullScanActive         = false
+        orctionFullScanResultsShowing = false
+        orctionSearchActive           = false
+        orctionSearchRetry            = false
+        orctionQueryRetryCount        = 0
+        orctionQueryDelay             = 0
+        orctionWaitTimeout            = 0
         if OrctionSearchingText then OrctionSearchingText:Hide() end
         DEFAULT_CHAT_FRAME:AddMessage("Orction: scan cancelled")
         Orction_DisplayResults()
@@ -1931,7 +2002,6 @@ local function Orction_BuildAHPanel()
 
     local watchlistToggleBtn = CreateFrame("Button", nil, OrctionAHPanel, "UIPanelButtonTemplate")
     watchlistToggleBtn:SetWidth(80)
-    watchlistToggleBtn:SetWidth(80)
     watchlistToggleBtn:SetHeight(23)
     watchlistToggleBtn:SetPoint("BOTTOMLEFT", OrctionAHPanel, "BOTTOMLEFT", 22, 66)
     watchlistToggleBtn:SetText("Watchlist")
@@ -1941,6 +2011,13 @@ local function Orction_BuildAHPanel()
             if wl:IsShown() then wl:Hide() else wl:Show() ; Orction_RefreshWatchlist() end
         end
     end)
+
+    local fullScanBtn = CreateFrame("Button", nil, OrctionAHPanel, "UIPanelButtonTemplate")
+    fullScanBtn:SetWidth(56)
+    fullScanBtn:SetHeight(23)
+    fullScanBtn:SetPoint("LEFT", watchlistToggleBtn, "RIGHT", 4, 0)
+    fullScanBtn:SetText("Scan")
+    fullScanBtn:SetScript("OnClick", Orction_StartFullScan)
 
     local cancelScanBtn = CreateFrame("Button", nil, OrctionAHPanel, "UIPanelButtonTemplate")
     cancelScanBtn:SetWidth(78)

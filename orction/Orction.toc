@@ -6,6 +6,7 @@
 ## SavedVariables: OrctionDB
 
 Database.lua
+OrctionSync.lua
 DataManagement.lua
 OrctionPostbox.lua
 OrctionVendor.lua
