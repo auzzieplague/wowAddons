@@ -524,9 +524,6 @@ local function Orction_DisplayResults()
         if orctionHasMorePages then nextPageBtn:Enable()
         else                        nextPageBtn:Disable() end
     end
-    DEFAULT_CHAT_FRAME:AddMessage(
-        "Orction: DisplayResults — similar=" .. table.getn(orctionSimilarResults) ..
-        " exact=" .. table.getn(orctionSearchResults))
     local exactMode = not (OrctionExactMatchCheck and OrctionExactMatchCheck:GetChecked() == nil)
 
     -- Choose result set
@@ -626,7 +623,6 @@ local function Orction_DisplayResults()
     -- Size both the scroll child and the scroll frame to fit content exactly,
     -- capped at the maximum viewport height (~8.5 rows).
     local visibleCount = needed
-    DEFAULT_CHAT_FRAME:AddMessage("Orction: groups=" .. visibleCount .. " (multiItem=" .. tostring(multiItem) .. ")")
     local MAX_H    = 316
     local contentH = visibleCount * RC_ROW_H
     if contentH < 1 then contentH = RC_ROW_H end
@@ -680,9 +676,6 @@ local function Orction_DisplayResults()
             row.frame:Hide()
         end
     end
-    DEFAULT_CHAT_FRAME:AddMessage(
-        "Orction: rendered " .. rowsRendered .. "/" .. table.getn(groups) ..
-        " groups (MAX_ROWS=" .. table.getn(orctionResultRows) .. ")")
     Orction_UpdateDeposit()
 end
 
@@ -704,7 +697,6 @@ local function Orction_CollectPage()
     orctionPageProcessed   = true
     orctionWaitTimeout     = 0  -- got real data, reset the timeout
     orctionQueryRetryCount = 0  -- successful response, clear retry counter
-    DEFAULT_CHAT_FRAME:AddMessage("Orction: page " .. orctionSearchPage .. " — batch=" .. batch .. " raw")
     Orction_UpdateSearchingText()
     local pageAdded = 0
     for i = 1, batch do
@@ -777,29 +769,18 @@ local function Orction_CollectPage()
         end
     end
 
-    DEFAULT_CHAT_FRAME:AddMessage(
-        "Orction: page " .. orctionSearchPage .. " — " .. pageAdded .. "/" .. batch ..
-        " with buyout, total=" .. table.getn(orctionSimilarResults))
-
     local nextPage  = orctionSearchPage + 1
     local pageLimit = orctionSearchStartPage + ORCTION_MAX_PAGES
     if nextPage < pageLimit and batch > 0 then
         orctionSearchPage  = nextPage
-        DEFAULT_CHAT_FRAME:AddMessage("Orction: fetching page " .. nextPage .. "...")
         orctionSearchRetry = true   -- OnUpdate will fire the next query after a short delay
         orctionQueryDelay  = 0
     else
         -- Stopped because we hit the page limit (more may exist) or ran out of results
         orctionHasMorePages  = (batch > 0)
         orctionNextStartPage = nextPage
-        DEFAULT_CHAT_FRAME:AddMessage(
-            "Orction: done — " .. table.getn(orctionSimilarResults) .. " total collected" ..
-            (orctionHasMorePages and ", more available" or "") .. ", displaying")
         orctionSearchActive = false
         if orctionScanMode then
-            local found = table.getn(orctionSimilarResults) - orctionScanItemStartCount
-            DEFAULT_CHAT_FRAME:AddMessage(
-                "Orction: " .. (orctionSearchName or "?") .. " — " .. found .. " results")
             orctionScanNextPending = true
             orctionScanNextDelay   = 0
         else
@@ -860,7 +841,6 @@ function Orction_FetchNextPages()
     if btn then btn:Disable() end
     if OrctionSearchingText then OrctionSearchingText:Show() end
     Orction_UpdateSearchingText()
-    DEFAULT_CHAT_FRAME:AddMessage("Orction: fetching next " .. ORCTION_MAX_PAGES .. " pages from page " .. orctionNextStartPage .. "...")
     Orction_Query(orctionSearchName, orctionNextStartPage)
 end
 
@@ -1028,6 +1008,11 @@ local function Orction_OnItemDrop()
         return
     end
     if not name then
+        if CursorHasItem() then
+            ClearCursor()
+            DEFAULT_CHAT_FRAME:AddMessage("Orction: This item cannot be auctioned.")
+            return
+        end
         orctionPendingSellRead = true
         orctionSellPollElapsed = 0
         return
@@ -1112,9 +1097,28 @@ local function Orction_SellSlotClear()
     return false
 end
 
-local function Orction_CreateAuction()
-    DEFAULT_CHAT_FRAME:AddMessage("Orction [CA]: pendingPost=" .. tostring(orctionPendingPost ~= nil))
+-- Resets the sell-side UI without touching search results.
+-- Clears the AH sell slot, resets count/stacks to 1, clears all value displays.
+local function Orction_ResetPostUI()
+    if GetAuctionSellItemInfo() then
+        ClickAuctionSellItemButton()
+        ClearCursor()
+    end
+    if OrctionItemTexture   then OrctionItemTexture:Hide() end
+    if OrctionItemNameText  then OrctionItemNameText:SetText("") end
+    if OrctionCountBox      then OrctionCountBox:SetText("1") end
+    if OrctionStacksBox     then OrctionStacksBox:SetText("1") end
+    if OrctionDepositValue  then OrctionDepositValue:SetText("--") end
+    if OrctionTotalFeeValue then OrctionTotalFeeValue:SetText("") end
+    if OrctionProfitValue   then OrctionProfitValue:SetText("") end
+    if OrctionVendorSellValue then OrctionVendorSellValue:SetText("--") end
+    if OrctionCreateBtn     then OrctionCreateBtn:SetText("Create Auction") end
+    orctionSellName    = nil
+    orctionVendorPrice = nil
+    orctionPendingPost = nil
+end
 
+local function Orction_CreateAuction()
     -- ── Pending post: stage or post depending on phase ─────────────────────
     if orctionPendingPost then
         local p = orctionPendingPost
@@ -1126,12 +1130,8 @@ local function Orction_CreateAuction()
                 return   -- keep pendingPost, user retries
             end
 
-            local _, tc = GetContainerItemInfo(p.tempBag, p.tempSlot)
-            DEFAULT_CHAT_FRAME:AddMessage("Orction [Post]: staged slot " .. p.tempBag .. "/" .. p.tempSlot .. " count=" .. tostring(tc))
-
             p.excludeSlots[p.tempBag * 1000 + p.tempSlot] = true
             PickupContainerItem(p.tempBag, p.tempSlot)
-            DEFAULT_CHAT_FRAME:AddMessage("Orction [Post]: cursor=" .. tostring(CursorHasItem()))
             if not CursorHasItem() then
                 DEFAULT_CHAT_FRAME:AddMessage("Orction: Staged slot empty — aborting.")
                 orctionPendingPost = nil
@@ -1141,7 +1141,6 @@ local function Orction_CreateAuction()
 
             ClickAuctionSellItemButton()
             local _, _, fc = GetAuctionSellItemInfo()
-            DEFAULT_CHAT_FRAME:AddMessage("Orction [Post]: sell slot=" .. tostring(fc))
             if not fc then
                 DEFAULT_CHAT_FRAME:AddMessage("Orction: Item not in sell slot.")
                 if CursorHasItem() then ClearCursor() end
@@ -1153,7 +1152,6 @@ local function Orction_CreateAuction()
             local durIdx = ORCTION_AUCTION_DURATION or 2
             local postDuration = durIdx == 1 and 120 or durIdx == 3 and 1440 or 480
             StartAuction(p.startBid, p.buyout, postDuration)
-            DEFAULT_CHAT_FRAME:AddMessage("Orction [Post]: StartAuction done count=" .. fc)
 
             p.stacksLeft = p.stacksLeft - 1
             p.staged     = false
@@ -1161,8 +1159,7 @@ local function Orction_CreateAuction()
             p.tempSlot   = nil
 
             if p.stacksLeft <= 0 then
-                orctionPendingPost = nil
-                OrctionCreateBtn:SetText("Create Auction")
+                Orction_ResetPostUI()
             else
                 local next = p.totalStacks - p.stacksLeft + 1
                 OrctionCreateBtn:SetText("Stage " .. next .. "/" .. p.totalStacks)
@@ -1171,7 +1168,6 @@ local function Orction_CreateAuction()
         else
             -- ── Phase 1: split count items → stage in empty bag slot ─────────
             local bag, slot, bagCount = Orction_FindBagSlot(p.name, p.count, p.excludeSlots)
-            DEFAULT_CHAT_FRAME:AddMessage("Orction [Stage]: FindBagSlot bag=" .. tostring(bag) .. " slot=" .. tostring(slot) .. " bagCount=" .. tostring(bagCount))
             if not bag then
                 DEFAULT_CHAT_FRAME:AddMessage("Orction: No source items — aborting.")
                 orctionPendingPost = nil
@@ -1188,16 +1184,13 @@ local function Orction_CreateAuction()
             end
 
             if bagCount > p.count then
-                DEFAULT_CHAT_FRAME:AddMessage("Orction [Stage]: Split(" .. bag .. "," .. slot .. "," .. p.count .. ")")
                 SplitContainerItem(bag, slot, p.count)
             else
-                DEFAULT_CHAT_FRAME:AddMessage("Orction [Stage]: Pickup(" .. bag .. "," .. slot .. ")")
                 PickupContainerItem(bag, slot)
                 -- Whole slot picked up — mark as emptied so stale data won't resurface it
                 p.excludeSlots[bag * 1000 + slot] = true
             end
 
-            DEFAULT_CHAT_FRAME:AddMessage("Orction [Stage]: cursor=" .. tostring(CursorHasItem()))
             if not CursorHasItem() then
                 DEFAULT_CHAT_FRAME:AddMessage("Orction: Failed to pick up items — aborting.")
                 orctionPendingPost = nil
@@ -1206,7 +1199,6 @@ local function Orction_CreateAuction()
             end
 
             PickupContainerItem(eb, es)
-            DEFAULT_CHAT_FRAME:AddMessage("Orction [Stage]: placed " .. eb .. "/" .. es .. " cursor=" .. tostring(CursorHasItem()))
             if CursorHasItem() then
                 DEFAULT_CHAT_FRAME:AddMessage("Orction: Failed to place in staging slot — aborting.")
                 ClearCursor()
@@ -1214,9 +1206,6 @@ local function Orction_CreateAuction()
                 OrctionCreateBtn:SetText("Create Auction")
                 return
             end
-
-            local _, sc = GetContainerItemInfo(eb, es)
-            DEFAULT_CHAT_FRAME:AddMessage("Orction [Stage]: staged slot count=" .. tostring(sc))
 
             p.staged   = true
             p.tempBag  = eb
@@ -1238,16 +1227,26 @@ local function Orction_CreateAuction()
     local stacks   = math.max(1, tonumber(OrctionStacksBox:GetText()) or 1)
     local buyout   = MoneyInputFrame_GetCopper(OrctionBuyout)
     local startBid = buyout
-    DEFAULT_CHAT_FRAME:AddMessage("Orction [CA]: " .. name .. " x" .. count .. " stacks=" .. stacks)
 
     local have = Orction_GetInventoryCount(name)
     local sn, _, sc = GetAuctionSellItemInfo()
     if sn == name then have = have + (sc or 0) end
     local need = count * stacks
-    DEFAULT_CHAT_FRAME:AddMessage("Orction [CA]: have=" .. have .. " need=" .. need)
     if have < need then
         DEFAULT_CHAT_FRAME:AddMessage("Orction: Need " .. need .. " " .. name .. ", have " .. have .. ".")
         return
+    end
+
+    -- Fast path: single stack and sell slot already has exactly the right count
+    if stacks == 1 then
+        local sn2, _, sc2 = GetAuctionSellItemInfo()
+        if sn2 == name and sc2 == count then
+            local durIdx = ORCTION_AUCTION_DURATION or 2
+            local postDuration = durIdx == 1 and 120 or durIdx == 3 and 1440 or 480
+            StartAuction(startBid, buyout, postDuration)
+            Orction_ResetPostUI()
+            return
+        end
     end
 
     -- Park the dragged sell slot item into bags so it can be split correctly.
@@ -1261,7 +1260,6 @@ local function Orction_CreateAuction()
             return
         end
         PickupContainerItem(eb, es)
-        DEFAULT_CHAT_FRAME:AddMessage("Orction [CA]: parked at " .. eb .. "/" .. es .. " cursor=" .. tostring(CursorHasItem()))
         if CursorHasItem() then
             DEFAULT_CHAT_FRAME:AddMessage("Orction: Could not park sell slot item.")
             ClearCursor()
@@ -1321,7 +1319,7 @@ local function Orction_DoTextSearch()
     else
         text = ""  -- empty search: browse by category / usable filter only
     end
-    if GetAuctionSellItemInfo() then ClickAuctionSellItemButton() end
+    Orction_ResetPostUI()
     orctionVendorPrice = Orction_GetVendorPrice(text)
     Orction_StartSearch(text, orctionSearchClassIndex, orctionSearchSubIndex)
 end
@@ -1549,9 +1547,6 @@ local function Orction_AHPanel_OnUpdate()
                 orctionQueryRetryCount = orctionQueryRetryCount + 1
                 orctionPageProcessed   = false
                 orctionWaitTimeout     = 0
-                DEFAULT_CHAT_FRAME:AddMessage(
-                    "Orction: no response for '" .. (orctionSearchName or "?") ..
-                    "', retrying (" .. orctionQueryRetryCount .. "/" .. ORCTION_MAX_RETRIES .. ")")
                 orctionSearchRetry = true   -- OnUpdate will re-fire QueryAuctionItems
                 orctionQueryDelay  = 0      -- rate-limit path uses ORCTION_RETRY_DELAY threshold
             else
@@ -1560,9 +1555,6 @@ local function Orction_AHPanel_OnUpdate()
                 orctionQueryRetryCount   = 0
                 orctionResponseReceived  = false
                 if orctionScanMode then
-                    local found = table.getn(orctionSimilarResults) - orctionScanItemStartCount
-                    DEFAULT_CHAT_FRAME:AddMessage(
-                        "Orction: " .. (orctionSearchName or "?") .. " — " .. found .. " results")
                     orctionScanNextPending = true
                     orctionScanNextDelay   = 0
                 else

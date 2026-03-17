@@ -524,6 +524,33 @@ dataSearchBtn:SetScript("OnClick", function()
     OrctionSettings_RefreshData()
 end)
 
+local dataOffsetLabel = dataPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+dataOffsetLabel:SetPoint("LEFT", dataSearchBtn, "RIGHT", 20, 0)
+dataOffsetLabel:SetText("Day Offset")
+
+local dataOffsetSlider = CreateFrame("Slider", "OrctionDataOffsetSlider", dataPanel, "OptionsSliderTemplate")
+dataOffsetSlider:SetWidth(120)
+dataOffsetSlider:SetPoint("LEFT", dataOffsetLabel, "RIGHT", 8, 0)
+dataOffsetSlider:SetMinMaxValues(0, 6)
+dataOffsetSlider:SetValueStep(1)
+dataOffsetSlider:SetValue(0)
+
+getglobal("OrctionDataOffsetSliderLow"):SetText("0")
+getglobal("OrctionDataOffsetSliderHigh"):SetText("6")
+
+local dataOffsetValueText = dataPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+dataOffsetValueText:SetPoint("LEFT", dataOffsetSlider, "RIGHT", 6, 0)
+dataOffsetValueText:SetText("0")
+
+dataOffsetSlider:SetScript("OnValueChanged", function()
+    local val = math.floor(this:GetValue() + 0.5)
+    dataOffsetValueText:SetText(tostring(val))
+    ORCTION_DAY_OFFSET = val
+    if OrctionDB and OrctionDB.settings then
+        OrctionDB.settings.dayOffset = val
+    end
+end)
+
 local purgeBtn = CreateFrame("Button", nil, dataPanel, "UIPanelButtonTemplate")
 purgeBtn:SetWidth(90)
 purgeBtn:SetHeight(22)
@@ -834,6 +861,10 @@ local function OrctionSettings_ApplyToUI()
     mailRetriesSlider:SetValue(mrt)
     mailRetriesValueText:SetText(tostring(mrt))
 
+    local off = s.dayOffset or 0
+    dataOffsetSlider:SetValue(off)
+    dataOffsetValueText:SetText(tostring(off))
+
     local vm = s.vendorMultiplier or 5.0
     vendorMultSlider:SetValue(vm)
     vendorMultValueText:SetText(vm .. "x")
@@ -882,6 +913,7 @@ settingsEventFrame:SetScript("OnEvent", function()
         if s.retryDelay       == nil then s.retryDelay       = 5000  end
         if s.maxRetries       == nil then s.maxRetries       = 2     end
         if s.dataCacheHours   == nil then s.dataCacheHours   = 1     end
+        if s.dayOffset        == nil then s.dayOffset        = 0     end
         if s.mailOpenDelay    == nil then s.mailOpenDelay    = 500   end
         if s.mailOpenRetries  == nil then s.mailOpenRetries  = 2     end
         if s.vendorMultiplier == nil then s.vendorMultiplier = 5.0   end
@@ -898,6 +930,7 @@ settingsEventFrame:SetScript("OnEvent", function()
         ORCTION_RETRY_DELAY       = s.retryDelay / 1000
         ORCTION_MAX_RETRIES       = s.maxRetries
         ORCTION_DATA_CACHE_HOURS  = s.dataCacheHours
+        ORCTION_DAY_OFFSET        = s.dayOffset
         ORCTION_MAIL_OPEN_DELAY   = s.mailOpenDelay / 1000
         ORCTION_MAIL_OPEN_RETRIES = s.mailOpenRetries
         ORCTION_VENDOR_MULTIPLIER = s.vendorMultiplier

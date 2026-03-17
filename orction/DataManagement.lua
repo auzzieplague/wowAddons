@@ -8,7 +8,8 @@ end
 
 local function OrctionData_GetDaySlot()
     local day = tonumber(date("%j")) or 1
-    return math.mod(day, 7) + 1
+    local offset = ORCTION_DAY_OFFSET or 0
+    return math.mod(day + offset, 7) + 1
 end
 
 local function OrctionData_GetPriceEntry(itemId, name)
