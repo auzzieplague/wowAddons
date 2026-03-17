@@ -124,8 +124,15 @@ function Orction_UpdateDeposit()
     local dep = CalculateAuctionDeposit and CalculateAuctionDeposit(durMinutes)
     if dep and dep > 0 then
         OrctionDepositValue:SetText(FormatMoneyColour(dep))
+        if OrctionTotalFeeValue then
+            local count  = math.max(1, tonumber(OrctionCountBox  and OrctionCountBox:GetText())  or 1)
+            local stacks = math.max(1, tonumber(OrctionStacksBox and OrctionStacksBox:GetText()) or 1)
+            local total  = dep * count * stacks
+            OrctionTotalFeeValue:SetText("(" .. FormatMoneyColour(total) .. ")")
+        end
     else
         OrctionDepositValue:SetText("--")
+        if OrctionTotalFeeValue then OrctionTotalFeeValue:SetText("") end
     end
 end
 
@@ -1023,7 +1030,8 @@ local function Orction_ClearItemSlot(keepCursor)
     end
     OrctionItemTexture:Hide()
     OrctionItemNameText:SetText("")
-    if OrctionDepositValue then OrctionDepositValue:SetText("--") end
+    if OrctionDepositValue  then OrctionDepositValue:SetText("--") end
+    if OrctionTotalFeeValue then OrctionTotalFeeValue:SetText("") end
     orctionSearchName  = nil
     orctionSellName    = nil
     orctionVendorPrice = nil
@@ -1710,7 +1718,7 @@ local function Orction_BuildAHPanel()
     -- Vendor Sell (below item slot)
     local vendorSellLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
     vendorSellLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 73, -138)
-    vendorSellLabel:SetText("Sell To Vendor:")
+    vendorSellLabel:SetText("Vendor:")
 
     OrctionVendorSellValue = OrctionAHPanel:CreateFontString("OrctionVendorSellValue", "ARTWORK", "GameFontHighlightSmall")
     OrctionVendorSellValue:SetPoint("LEFT", vendorSellLabel, "RIGHT", 4, 0)
@@ -1819,6 +1827,10 @@ local function Orction_BuildAHPanel()
     OrctionDepositValue = OrctionAHPanel:CreateFontString("OrctionDepositValue", "ARTWORK", "GameFontHighlightSmall")
     OrctionDepositValue:SetPoint("LEFT", depositLabel, "RIGHT", 6, 0)
     OrctionDepositValue:SetText("--")
+
+    OrctionTotalFeeValue = OrctionAHPanel:CreateFontString("OrctionTotalFeeValue", "ARTWORK", "GameFontHighlightSmall")
+    OrctionTotalFeeValue:SetPoint("LEFT", OrctionDepositValue, "RIGHT", 6, 0)
+    OrctionTotalFeeValue:SetText("")
 
     -- Create Auction button  ───────────────────────────────────────────────────
     OrctionCreateBtn = CreateFrame("Button", "OrctionCreateBtn", OrctionAHPanel, "UIPanelButtonTemplate")
