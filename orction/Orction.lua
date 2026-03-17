@@ -404,6 +404,8 @@ local function Orction_HookVendorPriceTooltip()
     end)
 end
 
+local Orction_AddToWatchlist  -- forward declaration; defined below
+
 -- ── Result row factory (called lazily from Orction_DisplayResults) ────────
 -- Column constants mirror those in Orction_BuildAHPanel.
 local RC_COL_ICON = 6
@@ -411,7 +413,8 @@ local RC_COL_NAME = 34
 local RC_COL1     = 178
 local RC_COL2     = 318
 local RC_COL3     = 412
-local RC_COL4     = 480
+local RC_COL4     = 458
+local RC_COL5     = 544
 local RC_ROW_H    = 37
 local RC_ROW_W    = 578
 
@@ -468,6 +471,17 @@ local function Orction_CreateResultRow(i)
         buyBtnFS:SetFont(fontFile or STANDARD_TEXT_FONT, 9, flags or "")
     end
 
+    local wlBtn = CreateFrame("Button", nil, rowBtn, "UIPanelButtonTemplate")
+    wlBtn:SetWidth(30)
+    wlBtn:SetHeight(22)
+    wlBtn:SetPoint("LEFT", rowBtn, "LEFT", RC_COL5, 0)
+    wlBtn:SetText("WL+")
+    local wlBtnFS = wlBtn:GetFontString()
+    if wlBtnFS then
+        local fontFile, _, flags = wlBtnFS:GetFont()
+        wlBtnFS:SetFont(fontFile or STANDARD_TEXT_FONT, 8, flags or "")
+    end
+
     local idx = i
     buyBtn:SetScript("OnClick", function()
         local row = orctionResultRows[idx]
@@ -488,6 +502,22 @@ local function Orction_CreateResultRow(i)
         end)
     end)
 
+    wlBtn:SetScript("OnMouseDown", function() this:GetParent():SetScript("OnClick", nil) end)
+    wlBtn:SetScript("OnMouseUp", function()
+        this:GetParent():SetScript("OnClick", function()
+            local row = orctionResultRows[idx]
+            if row and row.itemName then
+                Orction_AddToWatchlist(row.itemName, 0, 0)
+            end
+        end)
+    end)
+    wlBtn:SetScript("OnClick", function()
+        local row = orctionResultRows[idx]
+        if row and row.itemName then
+            Orction_AddToWatchlist(row.itemName, 0, 0)
+        end
+    end)
+
     rowBtn:SetScript("OnClick", function()
         local row = orctionResultRows[idx]
         if row and row.costPerItem then
@@ -497,7 +527,7 @@ local function Orction_CreateResultRow(i)
     end)
 
     orctionResultRows[i] = { frame = rowBtn, cost = costFS, qty = qtyFS,
-                              auctions = aucFS, buyBtn = buyBtn, bg = bg,
+                              auctions = aucFS, buyBtn = buyBtn, wlBtn = wlBtn, bg = bg,
                               nameFS = nameFS, iconTex = iconTex,
                               isEven = (math.mod(i, 2) == 0),
                               costPerItem = nil, firstBuyout = nil, itemName = nil, itemId = nil }
@@ -976,9 +1006,11 @@ local function Orction_UpdatePriceGraph(name)
     -- Compute day labels relative to today's rolling slot
     local todaySlot = math.mod((tonumber(date("%j")) or 1) + (ORCTION_DAY_OFFSET or 0), 7) + 1
     local values   = {}
+    local counts   = {}
     local colNames = {}
     for i = 1, 7 do
         values[i] = entry["day" .. i .. "Price"] or 0
+        counts[i] = entry["day" .. i .. "Count"] or 0
         local daysAgo = math.mod(todaySlot - i + 7, 7)
         if daysAgo == 0 then
             colNames[i] = "Today"
@@ -988,7 +1020,7 @@ local function Orction_UpdatePriceGraph(name)
             colNames[i] = daysAgo .. "d ago"
         end
     end
-    orctionPriceBarGraph:SetData(values, colNames, "positive")
+    orctionPriceBarGraph:SetData(values, colNames, "positive", counts)
 end
 
 -- Called when user drops an item onto the slot.
@@ -1400,7 +1432,7 @@ local function Orction_RefreshWatchlist()
     end
 end
 
-local function Orction_AddToWatchlist(name, classIndex, subIndex)
+Orction_AddToWatchlist = function(name, classIndex, subIndex)
     if not name or string.len(name) == 0 then return end
     local list = Orction_GetWatchlist()
     for i = 1, table.getn(list) do
@@ -1646,10 +1678,10 @@ local function Orction_BuildAHPanel()
     searchBtn:SetScript("OnClick", Orction_DoTextSearch)
 
     local addWatchBtn = CreateFrame("Button", nil, OrctionAHPanel, "UIPanelButtonTemplate")
-    addWatchBtn:SetWidth(22)
+    addWatchBtn:SetWidth(36)
     addWatchBtn:SetHeight(22)
     addWatchBtn:SetPoint("LEFT", searchBtn, "RIGHT", 4, 0)
-    addWatchBtn:SetText("+")
+    addWatchBtn:SetText("WL+")
     addWatchBtn:SetScript("OnClick", function()
         local text = OrctionSearchBox:GetText()
         if text and string.len(text) > 0 then

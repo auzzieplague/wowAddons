@@ -66,7 +66,12 @@ function OrctionBarGraph_Create(parent, width, height)
     function graph:Hide() frame:Hide() end
     function graph:IsShown() return frame:IsShown() end
 
-    function graph:SetData(values, columnNames, style)
+    -- counts: optional array of observation counts per bar.
+    -- Bars with fewer than CONFIDENCE_THRESHOLD observations have their colour
+    -- pulled toward the low end: colourPct = valuePct * min(1, count / threshold).
+    local CONFIDENCE_THRESHOLD = 20
+
+    function graph:SetData(values, columnNames, style, counts)
         -- Hide any previously shown bars
         for i = 1, activeCount do
             if barFrames[i] then barFrames[i]:Hide() end
@@ -90,9 +95,12 @@ function OrctionBarGraph_Create(parent, width, height)
         local barW   = math.max(1, math.floor(totalW / n))
 
         for i = 1, n do
-            local val = values[i] or 0
-            local pct = maxVal > 0 and (val / maxVal) or 0
-            local bh  = math.max(2, math.floor(pct * drawH))
+            local val        = values[i] or 0
+            local pct        = maxVal > 0 and (val / maxVal) or 0
+            local n_obs      = (counts and counts[i]) or CONFIDENCE_THRESHOLD
+            local confidence = math.min(1, n_obs / CONFIDENCE_THRESHOLD)
+            local colorPct   = pct * confidence
+            local bh         = math.max(2, math.floor(colorPct * drawH))
 
             -- Allocate bar frame on first use
             if not barFrames[i] then
@@ -113,6 +121,9 @@ function OrctionBarGraph_Create(parent, width, height)
                     if v > 0 then
                         local valStr = Orction_FormatMoney and Orction_FormatMoney(v) or tostring(v)
                         GameTooltip:AddLine(valStr, 1, 0.82, 0)
+                        if this._count then
+                            GameTooltip:AddLine(this._count .. " observations", 0.6, 0.6, 0.6)
+                        end
                     else
                         GameTooltip:AddLine("No data", 0.6, 0.6, 0.6)
                     end
@@ -128,6 +139,7 @@ function OrctionBarGraph_Create(parent, width, height)
 
             local b = barFrames[i]
             b._val     = val
+            b._count   = counts and (counts[i] or 0) or nil
             b._colName = (columnNames and columnNames[i]) or ("Day " .. i)
 
             b:ClearAllPoints()
@@ -141,7 +153,7 @@ function OrctionBarGraph_Create(parent, width, height)
             else
                 local r, g, bl
                 if style == "positive" then
-                    r, g, bl = PositiveColor(pct)
+                    r, g, bl = PositiveColor(colorPct)
                 else
                     r, g, bl = 0.4, 0.6, 1.0
                 end
