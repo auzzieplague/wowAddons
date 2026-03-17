@@ -122,7 +122,6 @@ function Orction_UpdateDeposit()
     if AuctionsMediumAuctionButton then AuctionsMediumAuctionButton:SetChecked(durIdx == 2 and 1 or nil) end
     if AuctionsLongAuctionButton   then AuctionsLongAuctionButton:SetChecked(  durIdx == 3 and 1 or nil) end
     local dep = CalculateAuctionDeposit and CalculateAuctionDeposit(durMinutes)
-    DEFAULT_CHAT_FRAME:AddMessage("Orction deposit: durMin=" .. durMinutes .. " dep=" .. tostring(dep))
     if dep and dep > 0 then
         OrctionDepositValue:SetText(FormatMoneyColour(dep))
     else
@@ -1124,7 +1123,9 @@ local function Orction_CreateAuction()
                 return
             end
 
-            StartAuction(p.startBid, p.buyout, ORCTION_DURATION)
+            local durIdx = ORCTION_AUCTION_DURATION or 2
+            local postDuration = durIdx == 1 and 120 or durIdx == 3 and 1440 or 480
+            StartAuction(p.startBid, p.buyout, postDuration)
             DEFAULT_CHAT_FRAME:AddMessage("Orction [Post]: StartAuction done count=" .. fc)
 
             p.stacksLeft = p.stacksLeft - 1
