@@ -46,8 +46,10 @@ local orctionScanNextDelay     = 0    -- seconds accumulated toward next scan it
 local orctionScanItemStartCount = 0   -- orctionSimilarResults count at start of current scan item
 local orctionScanCancel        = false -- user requested scan cancel
 local orctionScanResultsShowing = false -- scan finished; keep showing all results without exact-match re-filtering
-local orctionFullScanActive       = false  -- category full-scan is fetching pages
+local orctionFullScanActive         = false  -- category full-scan is fetching pages
 local orctionFullScanResultsShowing = false  -- category full-scan done; showing vendor-below results
+local orctionFullScanPagesProcessed = 0      -- pages collected since full scan started
+local FULL_SCAN_UPDATE_INTERVAL     = 3      -- redraw results every N pages during a full scan
 local orctionQueryRetryCount   = 0    -- retries fired for the current query (rate-limit recovery)
 local ORCTION_RETRY_DELAY      = 5.0  -- seconds to wait before retrying an empty query (synced from DB)
 local ORCTION_MAX_RETRIES      = 2    -- maximum retries per query before giving up (synced from DB)
@@ -487,6 +489,11 @@ local function Orction_CreateResultRow(i)
         wlBtnFS:SetFont(fontFile or STANDARD_TEXT_FONT, 8, flags or "")
     end
 
+    -- Vendor profit label: shown to the right of the buy button on green (below-vendor-cost) rows
+    local profitFS = rowBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    profitFS:SetPoint("LEFT", buyBtn, "RIGHT", 6, 0)
+    profitFS:Hide()
+
     local idx = i
     buyBtn:SetScript("OnClick", function()
         local row = orctionResultRows[idx]
@@ -533,7 +540,7 @@ local function Orction_CreateResultRow(i)
 
     orctionResultRows[i] = { frame = rowBtn, cost = costFS, qty = qtyFS,
                               auctions = aucFS, buyBtn = buyBtn, wlBtn = wlBtn, bg = bg,
-                              nameFS = nameFS, iconTex = iconTex,
+                              nameFS = nameFS, iconTex = iconTex, profitFS = profitFS,
                               isEven = (math.mod(i, 2) == 0),
                               costPerItem = nil, firstBuyout = nil, itemName = nil, itemId = nil }
 
@@ -632,11 +639,24 @@ local function Orction_DisplayResults()
         groups = filtered
     end
 
-    if OrctionSearchingText then OrctionSearchingText:Hide() end
+    -- Keep the scanning progress text visible during an active full scan;
+    -- for all other cases (normal search, scan complete) hide it.
+    if OrctionSearchingText then
+        if orctionFullScanActive then
+            OrctionSearchingText:Show()
+            Orction_UpdateSearchingText()
+        else
+            OrctionSearchingText:Hide()
+        end
+    end
 
+    -- Suppress the "couldn't exact match" banner during full category scans.
     if OrctionSimilarResultsText then
-        if orctionShowingSimilar then OrctionSimilarResultsText:Show()
-        else                          OrctionSimilarResultsText:Hide() end
+        if orctionShowingSimilar and not orctionFullScanActive and not orctionFullScanResultsShowing then
+            OrctionSimilarResultsText:Show()
+        else
+            OrctionSimilarResultsText:Hide()
+        end
     end
 
     local hasResults = table.getn(groups) > 0
@@ -708,9 +728,15 @@ local function Orction_DisplayResults()
             local btnLabel = "|cFFFFFFFF" .. tostring(g.firstCount) .. " for |r" .. FormatMoneyColour(g.costPerItem * g.firstCount)
             if g.vendorPrice and g.vendorPrice > 0 and g.costPerItem < g.vendorPrice then
                 row.bg:SetTexture(0, 0.35, 0, 0.55)
+                if row.profitFS then
+                    local profit = g.vendorPrice - g.costPerItem
+                    row.profitFS:SetText("|cFF00FF00+" .. FormatMoneyColour(profit) .. "|r")
+                    row.profitFS:Show()
+                end
             else
                 if row.isEven then row.bg:SetTexture(0.09, 0.09, 0.19, 0.5)
                 else                row.bg:SetTexture(0, 0, 0.09, 0.3) end
+                if row.profitFS then row.profitFS:Hide() end
             end
             row.buyBtn:SetText(btnLabel)
             if row.wlBtn then
@@ -723,7 +749,8 @@ local function Orction_DisplayResults()
             row.firstBuyout = nil
             row.itemName    = nil
             row.itemId      = nil
-            if row.wlBtn then row.wlBtn:Hide() end
+            if row.wlBtn    then row.wlBtn:Hide()    end
+            if row.profitFS then row.profitFS:Hide() end
             row.frame:Hide()
         end
     end
@@ -827,6 +854,17 @@ local function Orction_CollectPage()
         orctionSearchPage  = nextPage
         orctionSearchRetry = true   -- OnUpdate will fire the next query after a short delay
         orctionQueryDelay  = 0
+        if orctionFullScanActive then
+            orctionFullScanPagesProcessed = orctionFullScanPagesProcessed + 1
+            if math.mod(orctionFullScanPagesProcessed, FULL_SCAN_UPDATE_INTERVAL) == 0 then
+                Orction_DisplayResults()
+                -- DisplayResults hides the text; restore it so progress stays visible
+                if OrctionSearchingText then
+                    OrctionSearchingText:Show()
+                    Orction_UpdateSearchingText()
+                end
+            end
+        end
     else
         -- Stopped because we hit the page limit, ran out of results, or full scan exhausted
         orctionHasMorePages  = (batch > 0) and not orctionFullScanActive
@@ -1578,6 +1616,7 @@ local function Orction_StartFullScan()
     orctionScanNextPending        = false
     orctionFullScanActive         = true
     orctionFullScanResultsShowing = false
+    orctionFullScanPagesProcessed = 0
     orctionSearchName             = ""
     orctionSearchPage             = 0
     orctionSearchActive           = true
@@ -2246,15 +2285,16 @@ local function Orction_BuildAHPanel()
     scrollFrame:SetScrollChild(scrollChild)
 
     -- Status labels shown in place of the results table
-    OrctionSearchingText = scrollChild:CreateFontString("OrctionSearchingText", "OVERLAY", "GameFontHighlight")
-    OrctionSearchingText:SetPoint("TOP", scrollChild, "TOP", 0, -60)
-    OrctionSearchingText:SetText("Searching...")
-    OrctionSearchingText:Hide()
-
     OrctionNoResultsText = scrollChild:CreateFontString("OrctionNoResultsText", "OVERLAY", "GameFontHighlight")
     OrctionNoResultsText:SetPoint("TOP", scrollChild, "TOP", 0, -60)
     OrctionNoResultsText:SetText("No items available for buyout.")
     OrctionNoResultsText:Hide()
+
+    -- Searching/scanning progress — top-right of results area, same region as similar-results text
+    OrctionSearchingText = OrctionAHPanel:CreateFontString("OrctionSearchingText", "OVERLAY", "GameFontHighlight")
+    OrctionSearchingText:SetPoint("TOP", scrollFrame, "TOP", 140, 38)
+    OrctionSearchingText:SetText("Searching...")
+    OrctionSearchingText:Hide()
 
     OrctionSimilarResultsText = OrctionAHPanel:CreateFontString("OrctionSimilarResultsText", "OVERLAY", "GameFontHighlight")
     OrctionSimilarResultsText:SetPoint("BOTTOM", scrollFrame, "TOP", 180, 28)

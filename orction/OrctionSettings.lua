@@ -36,7 +36,7 @@ OrctionFrame:SetBackdrop({
     edgeSize = 32,
     insets   = { left = 11, right = 12, top = 12, bottom = 11 },
 })
-OrctionFrame:SetBackdropColor(0.12, 0.12, 0.12, 1)
+OrctionFrame:SetBackdropColor(0, 0, 0, 1)
 
 -------------------------------------------------------------------------------
 -- Title bar texture + title text
@@ -551,8 +551,25 @@ dataOffsetSlider:SetScript("OnValueChanged", function()
     end
 end)
 
+local purgeBtn = CreateFrame("Button", nil, dataPanel, "UIPanelButtonTemplate")
+purgeBtn:SetWidth(90)
+purgeBtn:SetHeight(22)
+purgeBtn:SetText("Purge Data")
+purgeBtn:SetScript("OnClick", function()
+    if OrctionDB then OrctionDB.priceHistory = {} end
+    OrctionSettings_RefreshData()
+end)
+
+local analyzeBtn = CreateFrame("Button", nil, dataPanel, "UIPanelButtonTemplate")
+analyzeBtn:SetWidth(90)
+analyzeBtn:SetHeight(22)
+analyzeBtn:SetText("Analyze")
+analyzeBtn:SetScript("OnClick", function()
+    DEFAULT_CHAT_FRAME:AddMessage("Orction: analyze data not implemented")
+end)
+
 local syncCheck = CreateFrame("CheckButton", "OrctionSyncEnabledCheck", dataPanel, "UICheckButtonTemplate")
-syncCheck:SetPoint("LEFT", dataOffsetValueText, "RIGHT", 16, 0)
+syncCheck:SetPoint("BOTTOMRIGHT", purgeBtn, "TOPRIGHT", 0, 8)
 local syncCheckText = getglobal("OrctionSyncEnabledCheckText")
 syncCheckText:SetText("Sync Data")
 syncCheck:SetScript("OnClick", function()
@@ -587,23 +604,6 @@ syncChannelBtn:SetScript("OnClick", function()
     ORCTION_SYNC_CHANNEL = next
     if OrctionSync_SetChannel then OrctionSync_SetChannel(next) end
     syncChannelBtn:SetText("Channel: " .. next)
-end)
-
-local purgeBtn = CreateFrame("Button", nil, dataPanel, "UIPanelButtonTemplate")
-purgeBtn:SetWidth(90)
-purgeBtn:SetHeight(22)
-purgeBtn:SetText("Purge Data")
-purgeBtn:SetScript("OnClick", function()
-    if OrctionDB then OrctionDB.priceHistory = {} end
-    OrctionSettings_RefreshData()
-end)
-
-local analyzeBtn = CreateFrame("Button", nil, dataPanel, "UIPanelButtonTemplate")
-analyzeBtn:SetWidth(90)
-analyzeBtn:SetHeight(22)
-analyzeBtn:SetText("Analyze")
-analyzeBtn:SetScript("OnClick", function()
-    DEFAULT_CHAT_FRAME:AddMessage("Orction: analyze data not implemented")
 end)
 
 local headerName = dataPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
