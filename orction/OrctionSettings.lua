@@ -298,6 +298,37 @@ dataCacheSlider:SetScript("OnValueChanged", function()
     end
 end)
 
+-- "Vendor Price Multiplier" label
+local vendorMultLabel = auctionPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+vendorMultLabel:SetPoint("TOPLEFT", dataCacheSlider, "BOTTOMLEFT", 0, -12)
+vendorMultLabel:SetText("No-Results Price (x vendor)")
+
+-- Slider: 2x–8x vendor price, step 0.5
+local vendorMultSlider = CreateFrame("Slider", "OrctionVendorMultSlider", auctionPanel, "OptionsSliderTemplate")
+vendorMultSlider:SetWidth(150)
+vendorMultSlider:SetPoint("TOPLEFT", vendorMultLabel, "BOTTOMLEFT", 0, -6)
+vendorMultSlider:SetMinMaxValues(2, 8)
+vendorMultSlider:SetValueStep(0.5)
+vendorMultSlider:SetValue(5)
+
+getglobal("OrctionVendorMultSliderLow"):SetText("2x")
+getglobal("OrctionVendorMultSliderHigh"):SetText("8x")
+
+local vendorMultValueText = auctionPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+vendorMultValueText:SetPoint("LEFT", vendorMultSlider, "RIGHT", 6, 0)
+vendorMultValueText:SetText("5x")
+
+vendorMultSlider:SetScript("OnValueChanged", function()
+    -- Round to nearest 0.5
+    local raw = this:GetValue()
+    local val = math.floor(raw * 2 + 0.5) / 2
+    vendorMultValueText:SetText(val .. "x")
+    ORCTION_VENDOR_MULTIPLIER = val
+    if OrctionDB and OrctionDB.settings then
+        OrctionDB.settings.vendorMultiplier = val
+    end
+end)
+
 
 -------------------------------------------------------------------------------
 -- TAB 2: Post
@@ -658,6 +689,15 @@ devTooltip:SetOwner(UIParent, "ANCHOR_NONE")
 local devPendingId = nil
 local devPendingElapsed = 0
 
+local fstackCheck = CreateFrame("CheckButton", "OrctionDevFstackCheck", devPanel, "OptionsCheckButtonTemplate")
+fstackCheck:SetPoint("TOPLEFT", devItemIdSlider, "BOTTOMLEFT", 0, -12)
+getglobal("OrctionDevFstackCheckText"):SetText("Enable /fstack overlay")
+fstackCheck:SetScript("OnClick", function()
+    if Orction_FStack_SetEnabled then
+        Orction_FStack_SetEnabled(this:GetChecked() == 1)
+    end
+end)
+
 local function OrctionDev_RequestItemInfo(id)
     devTooltip:SetHyperlink("item:" .. id)
     devTooltip:Hide()
@@ -793,6 +833,20 @@ local function OrctionSettings_ApplyToUI()
     local mrt = s.mailOpenRetries or 2
     mailRetriesSlider:SetValue(mrt)
     mailRetriesValueText:SetText(tostring(mrt))
+
+    local vm = s.vendorMultiplier or 5.0
+    vendorMultSlider:SetValue(vm)
+    vendorMultValueText:SetText(vm .. "x")
+
+    -- Re-apply duration button highlights when settings window opens
+    local dur = s.auctionDuration or 2
+    for j = 1, 3 do
+        local bj = getglobal("OrctionDurBtn"..j)
+        if bj then
+            if j == dur then bj:GetFontString():SetTextColor(1, 0.82, 0)
+            else              bj:GetFontString():SetTextColor(1, 1, 1) end
+        end
+    end
 end
 
 OrctionFrame:SetScript("OnShow", function()
@@ -830,6 +884,8 @@ settingsEventFrame:SetScript("OnEvent", function()
         if s.dataCacheHours   == nil then s.dataCacheHours   = 1     end
         if s.mailOpenDelay    == nil then s.mailOpenDelay    = 500   end
         if s.mailOpenRetries  == nil then s.mailOpenRetries  = 2     end
+        if s.vendorMultiplier == nil then s.vendorMultiplier = 5.0   end
+        if s.auctionDuration  == nil then s.auctionDuration  = 2     end
 
         -- Sync exact match checkbox
         if OrctionExactMatchCheck then
@@ -844,6 +900,8 @@ settingsEventFrame:SetScript("OnEvent", function()
         ORCTION_DATA_CACHE_HOURS  = s.dataCacheHours
         ORCTION_MAIL_OPEN_DELAY   = s.mailOpenDelay / 1000
         ORCTION_MAIL_OPEN_RETRIES = s.mailOpenRetries
+        ORCTION_VENDOR_MULTIPLIER = s.vendorMultiplier
+        ORCTION_AUCTION_DURATION  = s.auctionDuration
 
         -- Ensure persistent tables exist
         if not OrctionDB.vendorPrices then OrctionDB.vendorPrices = {} end
@@ -868,4 +926,55 @@ SlashCmdList["ORCTION"] = function()
     else
         OrctionFrame:Show()
     end
+end
+
+-------------------------------------------------------------------------------
+-- Debug: /fstack — show hovered frame name
+-------------------------------------------------------------------------------
+
+local orctionFStackEnabled = false
+local orctionFStackLast    = nil
+local orctionFStackElapsed = 0
+local orctionFStackFrame   = CreateFrame("Frame")
+orctionFStackFrame:SetScript("OnUpdate", function()
+    if not orctionFStackEnabled then return end
+    orctionFStackElapsed = orctionFStackElapsed + (arg1 or 0)
+    if orctionFStackElapsed < 0.1 then return end
+    orctionFStackElapsed = 0
+    local f = GetMouseFocus and GetMouseFocus() or nil
+    if f == orctionFStackLast then return end
+    orctionFStackLast = f
+    local name    = f and f.GetName    and f:GetName()    or "nil"
+    local ftype   = f and f.GetObjectType and f:GetObjectType() or "?"
+    local parent  = f and f.GetParent  and f:GetParent()  or nil
+    local pname   = parent and parent.GetName and parent:GetName() or "nil"
+    local w       = f and f.GetWidth   and math.floor(f:GetWidth()  + 0.5) or "?"
+    local h       = f and f.GetHeight  and math.floor(f:GetHeight() + 0.5) or "?"
+    GameTooltip:SetOwner(UIParent, "ANCHOR_CURSOR")
+    GameTooltip:ClearLines()
+    GameTooltip:AddLine(name, 1, 1, 0)
+    GameTooltip:AddLine("Type: "   .. ftype,          1, 1, 1)
+    GameTooltip:AddLine("Parent: " .. pname,           0.8, 0.8, 0.8)
+    GameTooltip:AddLine("Size: "   .. w .. " x " .. h, 0.8, 0.8, 0.8)
+    GameTooltip:Show()
+end)
+
+SLASH_ORCTION_FSTACK1 = "/fstack"
+function Orction_FStack_SetEnabled(enabled)
+    orctionFStackEnabled = enabled and true or false
+    if not orctionFStackEnabled then
+        orctionFStackLast = nil
+        GameTooltip:Hide()
+        DEFAULT_CHAT_FRAME:AddMessage("Orction: fstack off")
+    else
+        DEFAULT_CHAT_FRAME:AddMessage("Orction: fstack on (hover to see frame)")
+    end
+    if OrctionDevFstackCheck then
+        if orctionFStackEnabled then OrctionDevFstackCheck:SetChecked(1)
+        else OrctionDevFstackCheck:SetChecked(nil) end
+    end
+end
+
+SlashCmdList["ORCTION_FSTACK"] = function()
+    Orction_FStack_SetEnabled(not orctionFStackEnabled)
 end

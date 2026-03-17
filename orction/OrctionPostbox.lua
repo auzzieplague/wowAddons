@@ -33,28 +33,64 @@ local function OrctionPostal_MailHasItemOrMoney(i)
 end
 
 local function OrctionPostal_FindInboxItemButton(i)
-    local row = _G["InboxFrameItem" .. i]
+    local direct = _G["MailItem" .. i .. "Button"]
+    if direct then return direct end
+    local row = _G["InboxFrameItem" .. i] or _G["MailItem" .. i]
     if row then
-        return row.ItemButton or _G[row:GetName() .. "ItemButton"] or _G[row:GetName() .. "Button"]
+        return row.ItemButton or row.Button or _G[row:GetName() .. "ItemButton"] or _G[row:GetName() .. "Button"]
     end
-    return _G["InboxFrameItem" .. i .. "ItemButton"] or _G["InboxFrameItem" .. i .. "Button"]
+    return _G["InboxFrameItem" .. i .. "ItemButton"] or _G["InboxFrameItem" .. i .. "Button"] or
+           _G["MailItem" .. i .. "ItemButton"] or _G["MailItem" .. i .. "Button"]
+end
+
+local function OrctionPostal_FindInboxRow(i)
+    return _G["MailItem" .. i] or _G["InboxFrameItem" .. i]
+end
+
+local function OrctionPostal_FindExpireText(i)
+    local row = OrctionPostal_FindInboxRow(i)
+    if row then
+        return row.ExpireTime or _G[row:GetName() .. "ExpireTime"]
+    end
+    return _G["MailItem" .. i .. "ExpireTime"] or _G["InboxFrameItem" .. i .. "ExpireTime"]
 end
 
 local function OrctionPostal_UpdateInboxCounts()
     local num = GetInboxNumItems()
-    for i = 1, num do
+    local perPage = INBOXITEMS_TO_DISPLAY or 7
+    local page = (InboxFrame and InboxFrame.pageNum) or 1
+    local startIndex = (page - 1) * perPage
+    for i = 1, perPage do
+        local mailIndex = startIndex + i
+        local row = OrctionPostal_FindInboxRow(i)
         local btn = OrctionPostal_FindInboxItemButton(i)
         if btn then
             if not btn.orctionCountText then
                 btn.orctionCountText = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
                 btn.orctionCountText:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", -2, 2)
             end
-            local _, _, count = GetInboxItem(i)
-            if count and count > 1 then
+            local _, _, count = GetInboxItem(mailIndex)
+            if mailIndex <= num and count and count > 1 then
                 btn.orctionCountText:SetText(count)
                 btn.orctionCountText:Show()
             else
                 btn.orctionCountText:Hide()
+            end
+        end
+        if row then
+            if not row.orctionMoneyText then
+                local anchor = OrctionPostal_FindExpireText(i) or row
+                row.orctionMoneyText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                row.orctionMoneyText:SetJustifyH("RIGHT")
+                row.orctionMoneyText:SetWidth(120)
+                row.orctionMoneyText:SetPoint("TOPRIGHT", anchor, "BOTTOMRIGHT", 0, -2)
+            end
+            local _, _, _, _, money = GetInboxHeaderInfo(mailIndex)
+            if mailIndex <= num and money and money > 0 and Orction_FormatMoney then
+                row.orctionMoneyText:SetText(Orction_FormatMoney(money))
+                row.orctionMoneyText:Show()
+            else
+                row.orctionMoneyText:Hide()
             end
         end
     end
@@ -234,6 +270,15 @@ postalEvents:RegisterEvent("MAIL_SHOW")
 postalEvents:RegisterEvent("MAIL_CLOSED")
 postalEvents:RegisterEvent("MAIL_INBOX_UPDATE")
 postalEvents:RegisterEvent("INBOX_UPDATE")
+
+if InboxFrame_Update then
+    local orig_InboxFrame_Update = InboxFrame_Update
+    InboxFrame_Update = function(...)
+        local ret = orig_InboxFrame_Update(unpack(arg))
+        OrctionPostal_UpdateInboxCounts()
+        return ret
+    end
+end
 
 local postalPoll    = 0
 local postalPollMax = 3.0

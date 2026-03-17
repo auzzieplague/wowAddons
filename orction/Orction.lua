@@ -2,6 +2,8 @@ local ADDON_NAME = "Orction"
 local ORCTION_TAB_INDEX = nil
 local orig_AuctionFrameTab_OnClick = nil
 local ORCTION_DURATION = 1440  -- 24 hours in minutes
+ORCTION_AUCTION_DURATION  = 2    -- 1=6h, 2=24h, 3=72h (synced from settings)
+ORCTION_VENDOR_MULTIPLIER = 5.0  -- multiply vendor price when no AH results found
 
 -- ── Search state ───────────────────────────────────────────────────────────
 local ORCTION_MAX_PAGES      = 10
@@ -49,6 +51,11 @@ local ORCTION_MAX_RETRIES      = 2    -- maximum retries per query before giving
 local orctionSearchStartPage   = 0    -- first page of the current fetch batch
 local orctionNextStartPage     = 0    -- page to start from when "Next Page" is clicked
 local orctionHasMorePages      = false -- true when pagination stopped at ORCTION_MAX_PAGES, not at exhaustion
+local orctionBuyBidPlaced      = false -- PlaceAuctionBid was called; waiting for confirmation
+local orctionBuyBidTimeout     = 0     -- seconds since bid was placed with no AUCTION_ITEM_LIST_UPDATE
+local orctionBuyBidRechecked   = false -- true after one fallback re-query was fired
+local orctionPriceWriteQueue   = {}    -- {itemId, name, price} items waiting for async DB write
+local orctionSearchRecorded    = {}    -- key→true: items already queued for recording this search
 
 -- ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -96,6 +103,31 @@ local function Orction_TitleCaseWords(text)
     return string.gsub(text, "(%a)([%w']*)", function(a, b)
         return string.upper(a) .. b
     end)
+end
+
+-- Recalculates and displays the auction deposit for the current sell slot item.
+-- Must be called after the item is placed in the sell slot and after duration changes.
+function Orction_UpdateDeposit()
+    if not OrctionDepositValue then return end
+    if not GetAuctionSellItemInfo() then
+        OrctionDepositValue:SetText("--")
+        return
+    end
+    local durIdx = ORCTION_AUCTION_DURATION or 2
+    -- TurtleWoW tripled vanilla durations (2h→6h, 8h→24h, 24h→72h) but kept the original
+    -- vanilla runTime values in the deposit formula: Short=120min, Medium=480min, Long=1440min
+    local durMinutes = durIdx == 1 and 120 or durIdx == 3 and 1440 or 480
+    -- Sync Blizzard duration buttons for visual consistency
+    if AuctionsShortAuctionButton  then AuctionsShortAuctionButton:SetChecked( durIdx == 1 and 1 or nil) end
+    if AuctionsMediumAuctionButton then AuctionsMediumAuctionButton:SetChecked(durIdx == 2 and 1 or nil) end
+    if AuctionsLongAuctionButton   then AuctionsLongAuctionButton:SetChecked(  durIdx == 3 and 1 or nil) end
+    local dep = CalculateAuctionDeposit and CalculateAuctionDeposit(durMinutes)
+    DEFAULT_CHAT_FRAME:AddMessage("Orction deposit: durMin=" .. durMinutes .. " dep=" .. tostring(dep))
+    if dep and dep > 0 then
+        OrctionDepositValue:SetText(FormatMoneyColour(dep))
+    else
+        OrctionDepositValue:SetText("--")
+    end
 end
 
 local function Orction_UpdateSearchingText()
@@ -518,7 +550,6 @@ local function Orction_DisplayResults()
                             firstBuyout = item.buyout,
                             firstCount  = item.count }
             table.insert(groups, groupMap[k])
-            DEFAULT_CHAT_FRAME:AddMessage("Orction: group[" .. table.getn(groups) .. "] " .. k)
         end
         groupMap[k].totalCount  = groupMap[k].totalCount  + item.count
         groupMap[k].numAuctions = groupMap[k].numAuctions + 1
@@ -553,27 +584,13 @@ local function Orction_DisplayResults()
         end
     end
 
-    -- Auto-set buyout from cheapest exact result only
+    -- Auto-set buyout: cheapest exact match, or vendor × multiplier when no results
     if hasResults and not orctionShowingSimilar and OrctionCountBox then
         local count = math.max(1, tonumber(OrctionCountBox:GetText()) or 1)
         MoneyInputFrame_SetCopper(OrctionBuyout, groups[1].costPerItem * count)
-    end
-
-    -- Record cheapest per-item price for each item during scans or regular searches
-    if OrctionData_RecordScanPrice and (orctionScanMode or orctionSearchActive) then
-        local cheapest = {}
-        for _, item in ipairs(results) do
-            local k = item.itemId or ("name:" .. (item.name or ""))
-            local cur = cheapest[k]
-            if not cur or item.costPerItem < cur.costPerItem then
-                cheapest[k] = { itemId = item.itemId, name = item.name, costPerItem = item.costPerItem }
-            end
-        end
-        for _, v in pairs(cheapest) do
-            if not OrctionData_ShouldRecord or OrctionData_ShouldRecord(v.itemId, v.name) then
-                OrctionData_RecordScanPrice(v.itemId, v.name, v.costPerItem, 1)
-            end
-        end
+    elseif not hasResults and orctionSellName and orctionVendorPrice and orctionVendorPrice > 0 and OrctionCountBox and OrctionBuyout then
+        local count = math.max(1, tonumber(OrctionCountBox:GetText()) or 1)
+        MoneyInputFrame_SetCopper(OrctionBuyout, math.floor(orctionVendorPrice * (ORCTION_VENDOR_MULTIPLIER or 5.0)) * count)
     end
 
     -- Grow the row pool on demand — frames are permanent so this only fires when new rows are needed.
@@ -642,6 +659,7 @@ local function Orction_DisplayResults()
     DEFAULT_CHAT_FRAME:AddMessage(
         "Orction: rendered " .. rowsRendered .. "/" .. table.getn(groups) ..
         " groups (MAX_ROWS=" .. table.getn(orctionResultRows) .. ")")
+    Orction_UpdateDeposit()
 end
 
 local function Orction_CollectPage()
@@ -721,6 +739,17 @@ local function Orction_CollectPage()
             if name == orctionSearchName then
                 table.insert(orctionSearchResults, entry)
             end
+            -- Enqueue for async price recording: AH results are price-sorted so first
+            -- occurrence is the cheapest; skip items already queued this search.
+            local rKey = entry.itemId or ("name:" .. (name or ""))
+            if not orctionSearchRecorded[rKey] then
+                orctionSearchRecorded[rKey] = true
+                table.insert(orctionPriceWriteQueue, {
+                    itemId = entry.itemId,
+                    name   = name,
+                    price  = entry.costPerItem,
+                })
+            end
         end
     end
 
@@ -775,8 +804,10 @@ local function Orction_StartSearch(name, classIndex, subIndex)
     orctionHasMorePages      = false
     orctionSearchResults     = {}
     orctionSimilarResults    = {}
-    orctionShowingSimilar = false
-    orctionVendorCache   = {}
+    orctionShowingSimilar    = false
+    orctionVendorCache       = {}
+    orctionPriceWriteQueue   = {}
+    orctionSearchRecorded    = {}
     orctionVendorPrice   = (OrctionDB and OrctionDB.vendorPrices and OrctionDB.vendorPrices[name]) or 0
     Orction_SetSearchCategory(classIndex or orctionSearchClassIndex, subIndex or orctionSearchSubIndex)
     if OrctionVendorSellValue   then OrctionVendorSellValue:SetText("--") end
@@ -811,30 +842,15 @@ end
 
 local function Orction_TryBuy()
     if not orctionBuyPending then return end
-    local buyName    = orctionBuyPending.name or orctionSearchName
-    local buyBuyout  = orctionBuyPending.buyout
     local batch = GetNumAuctionItems("list")
-    for i = 1, batch do
-        local name, texture, count, quality, canUse, level,
-              minBid, minIncrement, buyoutPrice = GetAuctionItemInfo("list", i)
-        if name == buyName and buyoutPrice == buyBuyout then
-            PlaceAuctionBid("list", i, buyoutPrice)
-            orctionBuyPending = nil
-            -- Remove the bought entry from both result sets
-            local function removeFirst(t)
-                for j = 1, table.getn(t) do
-                    if t[j].buyout == buyBuyout and (t[j].name or "") == (buyName or "") then
-                        table.remove(t, j) return
-                    end
-                end
-            end
-            removeFirst(orctionSearchResults)
-            removeFirst(orctionSimilarResults)
-            Orction_DisplayResults()
-            return
-        end
-    end
-    -- Auction no longer exists — remove it from both result sets and refresh display.
+    if batch == 0 then return end  -- loading event; wait for real data
+
+    local buyName   = orctionBuyPending.name or orctionSearchName
+    local buyBuyout = orctionBuyPending.buyout
+
+    -- Reset the bid confirmation timer — we got a real response.
+    orctionBuyBidTimeout = 0
+
     local function removeFirst(t)
         for j = 1, table.getn(t) do
             if t[j].buyout == buyBuyout and (t[j].name or "") == (buyName or "") then
@@ -842,10 +858,48 @@ local function Orction_TryBuy()
             end
         end
     end
+
+    if orctionBuyBidPlaced then
+        -- A bid was placed; check whether the item is now gone (success) or still present (cooldown).
+        for i = 1, batch do
+            local name, _, _, _, _, _, _, _, buyoutPrice = GetAuctionItemInfo("list", i)
+            if name == buyName and buyoutPrice == buyBuyout then
+                -- Item still there — bid on cooldown. Clear state so user can retry manually.
+                orctionBuyPending      = nil
+                orctionBuyBidPlaced    = false
+                orctionBuyBidRechecked = false
+                DEFAULT_CHAT_FRAME:AddMessage("Orction: bid on cooldown — click Buy to try again.")
+                return
+            end
+        end
+        -- Item gone — purchase confirmed.
+        removeFirst(orctionSearchResults)
+        removeFirst(orctionSimilarResults)
+        orctionBuyPending      = nil
+        orctionBuyBidPlaced    = false
+        orctionBuyBidRechecked = false
+        Orction_DisplayResults()
+        return
+    end
+
+    -- First attempt: find and bid on the item.
+    for i = 1, batch do
+        local name, _, _, _, _, _, _, _, buyoutPrice = GetAuctionItemInfo("list", i)
+        if name == buyName and buyoutPrice == buyBuyout then
+            PlaceAuctionBid("list", i, buyoutPrice)
+            orctionBuyBidPlaced    = true
+            orctionBuyBidTimeout   = 0
+            orctionBuyBidRechecked = false
+            return
+        end
+    end
+
+    -- Auction not found — it sold or expired.
     removeFirst(orctionSearchResults)
     removeFirst(orctionSimilarResults)
-    orctionBuyPending = nil
-    DEFAULT_CHAT_FRAME:AddMessage("Orction: Auction not found (sold/expired) — removed from list.")
+    orctionBuyPending   = nil
+    orctionBuyBidPlaced = false
+    DEFAULT_CHAT_FRAME:AddMessage("Orction: auction not found (sold/expired) — removed.")
     Orction_DisplayResults()
 end
 
@@ -920,10 +974,10 @@ local function Orction_CompleteItemDrop(name, texture, count)
     if OrctionStacksBox then
         OrctionStacksBox:SetText(tostring(Orction_GetMaxStacks(name, count)))
     end
-    if OrctionDepositValue then OrctionDepositValue:SetText("--") end
     if OrctionDB then OrctionDB.stackCounts[name] = count end
     orctionSellName = name
     orctionVendorPrice = Orction_GetVendorPrice(name)
+    Orction_UpdateDeposit()
     Orction_StartSearch(name, 0, 0)
 end
 
@@ -1410,6 +1464,33 @@ local function Orction_AHPanel_OnUpdate()
             DEFAULT_CHAT_FRAME:AddMessage("Orction: sell slot read timed out")
         end
     end
+    if orctionBuyBidPlaced then
+        orctionBuyBidTimeout = orctionBuyBidTimeout + arg1
+        if orctionBuyBidTimeout >= 3.0 then
+            if not orctionBuyBidRechecked and orctionBuyPending then
+                orctionBuyBidRechecked = true
+                orctionBuyBidTimeout   = 0
+                Orction_Query(orctionBuyPending.name, 0)
+            else
+                orctionBuyPending      = nil
+                orctionBuyBidPlaced    = false
+                orctionBuyBidRechecked = false
+                orctionBuyBidTimeout   = 0
+                DEFAULT_CHAT_FRAME:AddMessage("Orction: buy confirmation timed out.")
+            end
+        end
+    end
+    -- Drain the async price-write queue: process up to 10 items per tick.
+    -- Runs during inter-page delays and after search completes.
+    if table.getn(orctionPriceWriteQueue) > 0 and OrctionData_RecordScanPrice then
+        for _ = 1, 10 do
+            if table.getn(orctionPriceWriteQueue) == 0 then break end
+            local item = table.remove(orctionPriceWriteQueue, 1)
+            if not OrctionData_ShouldRecord or OrctionData_ShouldRecord(item.itemId, item.name) then
+                OrctionData_RecordScanPrice(item.itemId, item.name, item.price, 1)
+            end
+        end
+    end
     if orctionScanNextPending then
         orctionScanNextDelay = orctionScanNextDelay + arg1
         if orctionScanNextDelay >= 0.5 then
@@ -1634,33 +1715,80 @@ local function Orction_BuildAHPanel()
     OrctionVendorSellValue:SetPoint("LEFT", vendorSellLabel, "RIGHT", 4, 0)
     OrctionVendorSellValue:SetText("--")
 
-    -- Duration is fixed at 24h — sync Blizzard's button so CalculateAuctionDeposit is accurate
-    AuctionsMediumAuctionButton:SetChecked(true)
+    -- Duration selector  ──────────────────────────────────────────────────────
+    local durLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    durLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 30, -155)
+    durLabel:SetText("Duration:")
+
+    local durOptions = {"6h", "24h", "72h"}
+    for i = 1, 3 do
+        local b = CreateFrame("Button", "OrctionDurBtn"..i, OrctionAHPanel, "UIPanelButtonTemplate")
+        b:SetWidth(38)
+        b:SetHeight(18)
+        if i == 1 then
+            b:SetPoint("LEFT", durLabel, "RIGHT", 4, 0)
+        else
+            b:SetPoint("LEFT", getglobal("OrctionDurBtn"..(i-1)), "RIGHT", 2, 0)
+        end
+        b:SetText(durOptions[i])
+        local idx = i
+        b:SetScript("OnClick", function()
+            ORCTION_AUCTION_DURATION = idx
+            if OrctionDB and OrctionDB.settings then
+                OrctionDB.settings.auctionDuration = idx
+            end
+            -- Highlight selected button with gold text, others normal
+            for j = 1, 3 do
+                local bj = getglobal("OrctionDurBtn"..j)
+                if bj then
+                    if j == idx then
+                        bj:GetFontString():SetTextColor(1, 0.82, 0)
+                    else
+                        bj:GetFontString():SetTextColor(1, 1, 1)
+                    end
+                end
+            end
+            Orction_UpdateDeposit()
+        end)
+    end
+    -- Apply initial highlight
+    do
+        local initDur = ORCTION_AUCTION_DURATION or 2
+        for j = 1, 3 do
+            local bj = getglobal("OrctionDurBtn"..j)
+            if bj then
+                if j == initDur then bj:GetFontString():SetTextColor(1, 0.82, 0)
+                else                  bj:GetFontString():SetTextColor(1, 1, 1) end
+            end
+        end
+    end
 
     -- Count / Stacks on the same row  ─────────────────────────────────────────
     local countLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    countLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -160)
+    countLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -180)
     countLabel:SetText("Count")
 
     local stacksLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    stacksLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 90, -160)
+    stacksLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 90, -180)
     stacksLabel:SetText("Stacks")
 
     OrctionCountBox = CreateFrame("EditBox", "OrctionCountBox", OrctionAHPanel, "InputBoxTemplate")
     OrctionCountBox:SetWidth(40)
     OrctionCountBox:SetHeight(18)
-    OrctionCountBox:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -175)
+    OrctionCountBox:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -195)
     OrctionCountBox:SetMaxLetters(4)
     OrctionCountBox:SetAutoFocus(false)
     OrctionCountBox:SetText("1")
+    OrctionCountBox:SetScript("OnTextChanged", function() Orction_UpdateDeposit() end)
 
     OrctionStacksBox = CreateFrame("EditBox", "OrctionStacksBox", OrctionAHPanel, "InputBoxTemplate")
     OrctionStacksBox:SetWidth(40)
     OrctionStacksBox:SetHeight(18)
-    OrctionStacksBox:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 90, -175)
+    OrctionStacksBox:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 90, -195)
     OrctionStacksBox:SetMaxLetters(3)
     OrctionStacksBox:SetAutoFocus(false)
     OrctionStacksBox:SetText("1")
+    OrctionStacksBox:SetScript("OnTextChanged", function() Orction_UpdateDeposit() end)
 
     local maxStacksBtn = CreateFrame("Button", nil, OrctionAHPanel, "UIPanelButtonTemplate")
     maxStacksBtn:SetWidth(40)
@@ -1675,16 +1803,16 @@ local function Orction_BuildAHPanel()
 
     -- Buyout Price  ────────────────────────────────────────────────────────────
     local buyoutLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    buyoutLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 30, -205)
+    buyoutLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 30, -222)
     buyoutLabel:SetText("Sell:")
 
     OrctionBuyout = CreateFrame("Frame", "OrctionBuyout", OrctionAHPanel, "MoneyInputFrameTemplate")
-    OrctionBuyout:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 70, -200)
+    OrctionBuyout:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 70, -218)
     ResizeMoneyInputFrame("OrctionBuyout")
 
     -- Deposit  ────────────────────────────────────────────────────────────────
     local depositLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    depositLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 30, -240)
+    depositLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 30, -257)
     depositLabel:SetText("Deposit:")
 
     OrctionDepositValue = OrctionAHPanel:CreateFontString("OrctionDepositValue", "ARTWORK", "GameFontHighlightSmall")
@@ -1695,7 +1823,7 @@ local function Orction_BuildAHPanel()
     OrctionCreateBtn = CreateFrame("Button", "OrctionCreateBtn", OrctionAHPanel, "UIPanelButtonTemplate")
     OrctionCreateBtn:SetWidth(150)
     OrctionCreateBtn:SetHeight(23)
-    OrctionCreateBtn:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 18, -260)
+    OrctionCreateBtn:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 18, -277)
     OrctionCreateBtn:SetText("Create Auction")
     OrctionCreateBtn:SetScript("OnClick", Orction_CreateAuction)
 

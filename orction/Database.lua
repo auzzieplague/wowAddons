@@ -1,3 +1,24 @@
+if not Orction_FormatMoney then
+	function Orction_FormatMoney(copper)
+		local c = tonumber(copper) or 0
+		if c < 0 then c = 0 end
+		local g = math.floor(c / 10000)
+		local s = math.floor(math.mod(c, 10000) / 100)
+		local x = math.mod(c, 100)
+		local parts = {}
+		if g > 0 then
+			table.insert(parts, "|cFFFFFFFF" .. tostring(g) .. "|r|cFFFFD700g|r")
+		end
+		if s > 0 then
+			table.insert(parts, "|cFFFFFFFF" .. tostring(s) .. "|r|cFFC0C0C0s|r")
+		end
+		if x > 0 or table.getn(parts) == 0 then
+			table.insert(parts, "|cFFFFFFFF" .. tostring(x) .. "|r|cFFB87333c|r")
+		end
+		return table.concat(parts, " ")
+	end
+end
+
 function SellValue_InitializeDB()
 	if not SellValues then
 		SellValues = {
