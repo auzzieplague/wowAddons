@@ -122,17 +122,35 @@ function Orction_UpdateDeposit()
     if AuctionsMediumAuctionButton then AuctionsMediumAuctionButton:SetChecked(durIdx == 2 and 1 or nil) end
     if AuctionsLongAuctionButton   then AuctionsLongAuctionButton:SetChecked(  durIdx == 3 and 1 or nil) end
     local dep = CalculateAuctionDeposit and CalculateAuctionDeposit(durMinutes)
+    local count  = math.max(1, tonumber(OrctionCountBox  and OrctionCountBox:GetText())  or 1)
+    local stacks = math.max(1, tonumber(OrctionStacksBox and OrctionStacksBox:GetText()) or 1)
     if dep and dep > 0 then
         OrctionDepositValue:SetText(FormatMoneyColour(dep))
         if OrctionTotalFeeValue then
-            local count  = math.max(1, tonumber(OrctionCountBox  and OrctionCountBox:GetText())  or 1)
-            local stacks = math.max(1, tonumber(OrctionStacksBox and OrctionStacksBox:GetText()) or 1)
-            local total  = dep * count * stacks
-            OrctionTotalFeeValue:SetText("(" .. FormatMoneyColour(total) .. ")")
+            OrctionTotalFeeValue:SetText("(" .. FormatMoneyColour(dep * count * stacks) .. ")")
+        end
+        -- Profit per item: buyout minus the larger of deposit or 5% AH cut
+        if OrctionProfitValue and OrctionBuyout then
+            local totalBuyout = MoneyInputFrame_GetCopper(OrctionBuyout)
+            if totalBuyout and totalBuyout > 0 then
+                local ahCut    = math.floor(totalBuyout * 0.05)
+                local deduct   = math.max(dep, ahCut)
+                local profit   = totalBuyout - deduct
+                local profitPI = math.floor(profit / count)
+                local vp       = orctionVendorPrice or 0
+                if profitPI <= vp and vp > 0 then
+                    OrctionProfitValue:SetText(FormatMoneyColour(profitPI) .. " |cFFFF4444— Vendor It!|r")
+                else
+                    OrctionProfitValue:SetText(FormatMoneyColour(profitPI))
+                end
+            else
+                OrctionProfitValue:SetText("--")
+            end
         end
     else
         OrctionDepositValue:SetText("--")
         if OrctionTotalFeeValue then OrctionTotalFeeValue:SetText("") end
+        if OrctionProfitValue   then OrctionProfitValue:SetText("") end
     end
 end
 
@@ -584,7 +602,7 @@ local function Orction_DisplayResults()
 
     if OrctionVendorSellValue then
         if orctionVendorPrice and orctionVendorPrice > 0 then
-            OrctionVendorSellValue:SetText(CopperToString(orctionVendorPrice))
+            OrctionVendorSellValue:SetText(FormatMoneyColour(orctionVendorPrice))
         else
             OrctionVendorSellValue:SetText("--")
         end
@@ -1032,6 +1050,7 @@ local function Orction_ClearItemSlot(keepCursor)
     OrctionItemNameText:SetText("")
     if OrctionDepositValue  then OrctionDepositValue:SetText("--") end
     if OrctionTotalFeeValue then OrctionTotalFeeValue:SetText("") end
+    if OrctionProfitValue   then OrctionProfitValue:SetText("") end
     orctionSearchName  = nil
     orctionSellName    = nil
     orctionVendorPrice = nil
@@ -1717,8 +1736,8 @@ local function Orction_BuildAHPanel()
 
     -- Vendor Sell (below item slot)
     local vendorSellLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
-    vendorSellLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 73, -138)
-    vendorSellLabel:SetText("Vendor:")
+    vendorSellLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 73, -132)
+    vendorSellLabel:SetText("vendor:")
 
     OrctionVendorSellValue = OrctionAHPanel:CreateFontString("OrctionVendorSellValue", "ARTWORK", "GameFontHighlightSmall")
     OrctionVendorSellValue:SetPoint("LEFT", vendorSellLabel, "RIGHT", 4, 0)
@@ -1726,7 +1745,7 @@ local function Orction_BuildAHPanel()
 
     -- Duration selector  ──────────────────────────────────────────────────────
     local durLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    durLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 30, -155)
+    durLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 30, -79)
     durLabel:SetText("Duration:")
 
     local durOptions = {"6h", "24h", "72h"}
@@ -1773,34 +1792,34 @@ local function Orction_BuildAHPanel()
     end
 
     -- Count / Stacks on the same row  ─────────────────────────────────────────
-    local countLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    countLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -180)
+    local countLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+    countLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 25, -168)
     countLabel:SetText("Count")
 
-    local stacksLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    stacksLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 90, -180)
+    local stacksLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+    stacksLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 120, -152)
     stacksLabel:SetText("Stacks")
 
     OrctionCountBox = CreateFrame("EditBox", "OrctionCountBox", OrctionAHPanel, "InputBoxTemplate")
-    OrctionCountBox:SetWidth(40)
+    OrctionCountBox:SetWidth(34)
     OrctionCountBox:SetHeight(18)
-    OrctionCountBox:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 34, -195)
+    OrctionCountBox:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 64, -165)
     OrctionCountBox:SetMaxLetters(4)
     OrctionCountBox:SetAutoFocus(false)
     OrctionCountBox:SetText("1")
     OrctionCountBox:SetScript("OnTextChanged", function() Orction_UpdateDeposit() end)
 
     OrctionStacksBox = CreateFrame("EditBox", "OrctionStacksBox", OrctionAHPanel, "InputBoxTemplate")
-    OrctionStacksBox:SetWidth(40)
+    OrctionStacksBox:SetWidth(15)
     OrctionStacksBox:SetHeight(18)
-    OrctionStacksBox:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 90, -195)
+    OrctionStacksBox:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 123, -165)
     OrctionStacksBox:SetMaxLetters(3)
     OrctionStacksBox:SetAutoFocus(false)
     OrctionStacksBox:SetText("1")
     OrctionStacksBox:SetScript("OnTextChanged", function() Orction_UpdateDeposit() end)
 
     local maxStacksBtn = CreateFrame("Button", nil, OrctionAHPanel, "UIPanelButtonTemplate")
-    maxStacksBtn:SetWidth(40)
+    maxStacksBtn:SetWidth(50)
     maxStacksBtn:SetHeight(18)
     maxStacksBtn:SetPoint("LEFT", OrctionStacksBox, "RIGHT", 4, 0)
     maxStacksBtn:SetText("Max")
@@ -1811,32 +1830,45 @@ local function Orction_BuildAHPanel()
     end)
 
     -- Buyout Price  ────────────────────────────────────────────────────────────
-    local buyoutLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    buyoutLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 30, -222)
-    buyoutLabel:SetText("Sell:")
+    local buyoutLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+    buyoutLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 30, -190)
+    buyoutLabel:SetText("Price")
 
     OrctionBuyout = CreateFrame("Frame", "OrctionBuyout", OrctionAHPanel, "MoneyInputFrameTemplate")
-    OrctionBuyout:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 70, -218)
+    OrctionBuyout:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 65, -186)
     ResizeMoneyInputFrame("OrctionBuyout")
+    -- Trigger recalculation when sell price changes
+    for _, suffix in ipairs({"Gold", "Silver", "Copper"}) do
+        local eb = getglobal("OrctionBuyout" .. suffix)
+        if eb then eb:SetScript("OnTextChanged", function() Orction_UpdateDeposit() end) end
+    end
 
-    -- Deposit  ────────────────────────────────────────────────────────────────
-    local depositLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    depositLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 30, -257)
-    depositLabel:SetText("Deposit:")
+    -- Cost / Earn row  ──────────────────────────────────────────────────────────
+    local costLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+    costLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 30, -230)
+    costLabel:SetText("Cost:")
 
-    OrctionDepositValue = OrctionAHPanel:CreateFontString("OrctionDepositValue", "ARTWORK", "GameFontHighlightSmall")
-    OrctionDepositValue:SetPoint("LEFT", depositLabel, "RIGHT", 6, 0)
+    OrctionDepositValue = OrctionAHPanel:CreateFontString("OrctionDepositValue", "ARTWORK", "GameFontNormalSmall")
+    OrctionDepositValue:SetPoint("LEFT", costLabel, "RIGHT", 4, 0)
     OrctionDepositValue:SetText("--")
 
-    OrctionTotalFeeValue = OrctionAHPanel:CreateFontString("OrctionTotalFeeValue", "ARTWORK", "GameFontHighlightSmall")
-    OrctionTotalFeeValue:SetPoint("LEFT", OrctionDepositValue, "RIGHT", 6, 0)
+    OrctionTotalFeeValue = OrctionAHPanel:CreateFontString("OrctionTotalFeeValue", "ARTWORK", "GameFontNormalSmall")
+    OrctionTotalFeeValue:SetPoint("LEFT", OrctionDepositValue, "RIGHT", 4, 0)
     OrctionTotalFeeValue:SetText("")
+
+    local earnLabel = OrctionAHPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+    earnLabel:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 30, -210)
+    earnLabel:SetText("Earn:")
+
+    OrctionProfitValue = OrctionAHPanel:CreateFontString("OrctionProfitValue", "ARTWORK", "GameFontNormalSmall")
+    OrctionProfitValue:SetPoint("LEFT", earnLabel, "RIGHT", 4, 0)
+    OrctionProfitValue:SetText("")
 
     -- Create Auction button  ───────────────────────────────────────────────────
     OrctionCreateBtn = CreateFrame("Button", "OrctionCreateBtn", OrctionAHPanel, "UIPanelButtonTemplate")
     OrctionCreateBtn:SetWidth(150)
     OrctionCreateBtn:SetHeight(23)
-    OrctionCreateBtn:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 18, -277)
+    OrctionCreateBtn:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 35, -248)
     OrctionCreateBtn:SetText("Create Auction")
     OrctionCreateBtn:SetScript("OnClick", Orction_CreateAuction)
 
