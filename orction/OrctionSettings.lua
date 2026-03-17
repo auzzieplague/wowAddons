@@ -580,7 +580,7 @@ syncChannelBtn:SetScript("OnClick", function()
     for i = 1, table.getn(syncChannels) do
         if syncChannels[i] == cur then idx = i end
     end
-    local next = syncChannels[(idx % table.getn(syncChannels)) + 1]
+    local next = syncChannels[(math.mod(idx, table.getn(syncChannels))) + 1]
     if OrctionDB and OrctionDB.settings then
         OrctionDB.settings.syncChannel = next
     end

@@ -713,6 +713,9 @@ local function Orction_DisplayResults()
                 else                row.bg:SetTexture(0, 0, 0.09, 0.3) end
             end
             row.buyBtn:SetText(btnLabel)
+            if row.wlBtn then
+                if multiItem then row.wlBtn:Show() else row.wlBtn:Hide() end
+            end
             row.frame:Show()
             rowsRendered = rowsRendered + 1
         else
@@ -720,6 +723,7 @@ local function Orction_DisplayResults()
             row.firstBuyout = nil
             row.itemName    = nil
             row.itemId      = nil
+            if row.wlBtn then row.wlBtn:Hide() end
             row.frame:Hide()
         end
     end
@@ -835,14 +839,28 @@ local function Orction_CollectPage()
             orctionFullScanActive         = false
             orctionFullScanResultsShowing = true
             Orction_DisplayResults()
-            local below = 0
+            -- Build category label
+            local catName = Orction_GetClassName(orctionSearchClassIndex)
+            local catLabel = (catName ~= "None") and catName or "All"
+            if orctionSearchSubIndex and orctionSearchSubIndex > 0 then
+                local sub = Orction_GetSubClassName(orctionSearchClassIndex, orctionSearchSubIndex)
+                if sub and sub ~= "None" then catLabel = catLabel .. " > " .. sub end
+            end
+            -- Count unique items queued for recording (datapoints)
+            local datapoints = 0
+            for _ in pairs(orctionSearchRecorded) do datapoints = datapoints + 1 end
+            -- Count unique item names below vendor price
+            local belowNames = {}
             for _, r in ipairs(orctionSimilarResults) do
                 if r.vendorPrice and r.vendorPrice > 0 and r.costPerItem < r.vendorPrice then
-                    below = below + 1
+                    belowNames[r.name or "?"] = true
                 end
             end
+            local below = 0
+            for _ in pairs(belowNames) do below = below + 1 end
             DEFAULT_CHAT_FRAME:AddMessage(
-                "Orction: scan complete — " .. below .. " auctions below vendor price")
+                "Orction: Scanned [" .. catLabel .. "] - recorded " .. datapoints ..
+                " new datapoints, found " .. below .. " items under vendor cost - see above")
         else
             Orction_DisplayResults()
         end
@@ -1070,6 +1088,7 @@ local function Orction_CompleteItemDrop(name, texture, count)
     end
     if OrctionDB then OrctionDB.stackCounts[name] = count end
     orctionSellName = name
+    if OrctionSearchBox then OrctionSearchBox:SetText(name) end
     orctionVendorPrice = Orction_GetVendorPrice(name)
     Orction_UpdateDeposit()
     Orction_StartSearch(name, 0, 0)
