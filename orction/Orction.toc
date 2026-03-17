@@ -11,4 +11,5 @@ OrctionPostbox.lua
 OrctionVendor.lua
 OrctionTooltip.lua
 OrctionSettings.lua
+OrctionBarGraph.lua
 Orction.lua

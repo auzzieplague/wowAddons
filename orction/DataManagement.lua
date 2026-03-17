@@ -36,6 +36,24 @@ function OrctionData_ShouldRecord(itemId, name)
     return (time() - last) >= cacheSeconds
 end
 
+-- Returns the raw price history entry for an item, or nil if not found.
+-- Tries numeric itemId key first, then "name:<name>" key, then a full scan by name.
+function OrctionData_GetItemHistory(itemId, name)
+    if not (OrctionDB and OrctionDB.priceHistory) then return nil end
+    if itemId and itemId > 0 then
+        local e = OrctionDB.priceHistory[itemId]
+        if e then return e end
+    end
+    if name then
+        local e = OrctionDB.priceHistory["name:" .. name]
+        if e then return e end
+        for _, entry in pairs(OrctionDB.priceHistory) do
+            if entry.name == name then return entry end
+        end
+    end
+    return nil
+end
+
 -- Record a buyout price observation into the day slot rolling window.
 -- price is total buyout for the auction stack; count is stack size.
 function OrctionData_RecordScanPrice(itemId, name, price, count)

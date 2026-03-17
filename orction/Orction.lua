@@ -20,6 +20,7 @@ local orctionQueryDelay      = 0     -- seconds accumulated since retry was flag
 local orctionWaitTimeout     = 0     -- seconds waiting for non-zero batch on current page
 local orctionResponseReceived = false -- true once AUCTION_ITEM_LIST_UPDATE has fired for this query
 local orctionPendingPost     = nil   -- { name, startBid, buyout, count, stacksLeft, totalStacks }
+local orctionPriceBarGraph   = nil   -- bar-graph widget for item price history
 local orctionPendingDrop     = nil   -- { name, texture, count } while confirm dialog is open
 local orctionVendorPrice     = nil   -- vendor sell price (copper) for the current search item
 local orctionSellName        = nil   -- name of the item currently in the sell slot (for Create Auction)
@@ -964,6 +965,32 @@ local function Orction_FindBagSlot(itemName, needed, excludeSlots)
     return nil
 end
 
+-- Loads 7-day price history for the given item name and refreshes the bar graph.
+local function Orction_UpdatePriceGraph(name)
+    if not orctionPriceBarGraph then return end
+    local entry = OrctionData_GetItemHistory and OrctionData_GetItemHistory(nil, name)
+    if not entry then
+        orctionPriceBarGraph:Hide()
+        return
+    end
+    -- Compute day labels relative to today's rolling slot
+    local todaySlot = math.mod((tonumber(date("%j")) or 1) + (ORCTION_DAY_OFFSET or 0), 7) + 1
+    local values   = {}
+    local colNames = {}
+    for i = 1, 7 do
+        values[i] = entry["day" .. i .. "Price"] or 0
+        local daysAgo = math.mod(todaySlot - i + 7, 7)
+        if daysAgo == 0 then
+            colNames[i] = "Today"
+        elseif daysAgo == 1 then
+            colNames[i] = "Yesterday"
+        else
+            colNames[i] = daysAgo .. "d ago"
+        end
+    end
+    orctionPriceBarGraph:SetData(values, colNames, "positive")
+end
+
 -- Called when user drops an item onto the slot.
 -- ClearCursor is reliable when cursor item came from a bag (returns to source bag slot).
 -- We scan empty slots before + after to identify which slot the item returned to,
@@ -983,6 +1010,7 @@ local function Orction_CompleteItemDrop(name, texture, count)
     orctionVendorPrice = Orction_GetVendorPrice(name)
     Orction_UpdateDeposit()
     Orction_StartSearch(name, 0, 0)
+    Orction_UpdatePriceGraph(name)
 end
 
 local function Orction_HandleSellSlotItem(name, texture, count)
@@ -1113,6 +1141,7 @@ local function Orction_ResetPostUI()
     if OrctionProfitValue   then OrctionProfitValue:SetText("") end
     if OrctionVendorSellValue then OrctionVendorSellValue:SetText("--") end
     if OrctionCreateBtn     then OrctionCreateBtn:SetText("Create Auction") end
+    if orctionPriceBarGraph then orctionPriceBarGraph:Hide() end
     orctionSellName    = nil
     orctionVendorPrice = nil
     orctionPendingPost = nil
@@ -1863,6 +1892,10 @@ local function Orction_BuildAHPanel()
     OrctionCreateBtn:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 35, -248)
     OrctionCreateBtn:SetText("Create Auction")
     OrctionCreateBtn:SetScript("OnClick", Orction_CreateAuction)
+
+    -- Price history bar graph (positioned below the Create Auction button)
+    orctionPriceBarGraph = OrctionBarGraph_Create(OrctionAHPanel, 196, 64)
+    orctionPriceBarGraph.frame:SetPoint("TOPLEFT", OrctionCreateBtn, "BOTTOMLEFT", -12, -8)
 
     local watchlistToggleBtn = CreateFrame("Button", nil, OrctionAHPanel, "UIPanelButtonTemplate")
     watchlistToggleBtn:SetWidth(80)
