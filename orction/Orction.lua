@@ -6,7 +6,7 @@ ORCTION_AUCTION_DURATION  = 2    -- 1=6h, 2=24h, 3=72h (synced from settings)
 ORCTION_VENDOR_MULTIPLIER = 5.0  -- multiply vendor price when no AH results found
 
 -- ── Search state ───────────────────────────────────────────────────────────
-local ORCTION_MAX_PAGES      = 10
+ORCTION_MAX_PAGES            = 10  -- overwritten by settings on ADDON_LOADED
 local ORCTION_PAGE_SIZE      = 50
 local orctionSearchName      = nil
 local orctionSearchPage      = 0
@@ -585,8 +585,8 @@ end
 local function Orction_DisplayResults()
     local nextPageBtn = getglobal("OrctionNextPageBtn")
     if nextPageBtn then
-        if orctionHasMorePages then nextPageBtn:Enable()
-        else                        nextPageBtn:Disable() end
+        if orctionHasMorePages and not orctionSearchActive then nextPageBtn:Enable()
+        else                                                   nextPageBtn:Disable() end
     end
     local exactMode = not (OrctionExactMatchCheck and OrctionExactMatchCheck:GetChecked() == nil)
 
@@ -660,20 +660,19 @@ local function Orction_DisplayResults()
         groups = filtered
     end
 
-    -- Keep the scanning progress text visible during an active full scan;
-    -- for all other cases (normal search, scan complete) hide it.
+    -- Update progress text only while actively searching/scanning.
+    -- On completion the caller sets the text directly; we leave it alone.
     if OrctionSearchingText then
-        if orctionFullScanActive then
+        if orctionFullScanActive or orctionSearchActive then
             OrctionSearchingText:Show()
             Orction_UpdateSearchingText()
-        else
-            OrctionSearchingText:Hide()
         end
     end
 
-    -- Suppress the "couldn't exact match" banner during full category scans.
+    -- Hide "couldn't exact match" banner while a search is in progress or during scans.
     if OrctionSimilarResultsText then
-        if orctionShowingSimilar and not orctionFullScanActive and not orctionFullScanResultsShowing then
+        if orctionShowingSimilar and not orctionSearchActive
+                and not orctionFullScanActive and not orctionFullScanResultsShowing then
             OrctionSimilarResultsText:Show()
         else
             OrctionSimilarResultsText:Hide()
@@ -908,6 +907,7 @@ local function Orction_CollectPage()
             orctionFullScanActive         = false
             orctionFullScanResultsShowing = true
             Orction_DisplayResults()
+            if OrctionSearchingText then OrctionSearchingText:SetText("Scan complete") ; OrctionSearchingText:Show() end
             -- Build category label
             local catLabel = Orction_GetCategoryLabel()
             -- Count unique items queued for recording (datapoints)
@@ -927,6 +927,7 @@ local function Orction_CollectPage()
                 " new datapoints, found " .. below .. " items under vendor cost - see above")
         else
             Orction_DisplayResults()
+            if OrctionSearchingText then OrctionSearchingText:SetText("Search complete") ; OrctionSearchingText:Show() end
         end
     end
 end
@@ -1601,11 +1602,11 @@ local function Orction_ScanNext()
     local total = table.getn(orctionScanQueue)
     if orctionScanIndex > total then
         -- All items scanned — display accumulated results
-        if OrctionSearchingText then OrctionSearchingText:Hide() end
         orctionScanResultsShowing = true
         Orction_DisplayResults()
         orctionScanMode  = false
         orctionScanQueue = nil
+        if OrctionSearchingText then OrctionSearchingText:SetText("Scan complete") ; OrctionSearchingText:Show() end
         DEFAULT_CHAT_FRAME:AddMessage(
             "Orction: scan complete — " .. table.getn(orctionSimilarResults) .. " results")
         return
