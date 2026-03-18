@@ -4,6 +4,7 @@
 -- Usage:
 --   local graph = OrctionBarGraph_Create(parent, width, height)
 --   graph.frame:SetPoint(...)
+--   graph:SetSize(width, height)
 --   graph:SetData(values, columnNames, style)   -- style: "positive"
 --   graph:Hide() / graph:Show()
 --
@@ -14,6 +15,7 @@
 
 local BAR_GAP   = 2   -- px between bars
 local TOP_PAD   = 4   -- px reserved above the tallest bar
+local LABEL_PAD = 10  -- px reserved for labels when enabled
 
 -- ── Colour helpers ────────────────────────────────────────────────────────
 
@@ -57,24 +59,34 @@ function OrctionBarGraph_Create(parent, width, height)
     baseline:SetVertexColor(0.4, 0.4, 0.4, 0.6)
 
     local barFrames = {}   -- reusable bar frame pool
+    local labelFrames = {} -- label pool
     local activeCount = 0
 
     -- ── graph table (public API) ──────────────────────────────────────────
     local graph = { frame = frame }
+    graph._width = width
+    graph._height = height
 
     function graph:Show() frame:Show() end
     function graph:Hide() frame:Hide() end
     function graph:IsShown() return frame:IsShown() end
+    function graph:SetSize(w, h)
+        graph._width = w or graph._width
+        graph._height = h or graph._height
+        frame:SetWidth(graph._width)
+        frame:SetHeight(graph._height)
+    end
 
     -- counts: optional array of observation counts per bar.
     -- Bars with fewer than CONFIDENCE_THRESHOLD observations have their colour
     -- pulled toward the low end: colourPct = valuePct * min(1, count / threshold).
     local CONFIDENCE_THRESHOLD = 20
 
-    function graph:SetData(values, columnNames, style, counts)
+    function graph:SetData(values, columnNames, style, counts, options)
         -- Hide any previously shown bars
         for i = 1, activeCount do
             if barFrames[i] then barFrames[i]:Hide() end
+            if labelFrames[i] then labelFrames[i]:Hide() end
         end
 
         local n = table.getn(values)
@@ -90,8 +102,12 @@ function OrctionBarGraph_Create(parent, width, height)
             if v > maxVal then maxVal = v end
         end
 
-        local drawH = height - TOP_PAD           -- usable bar height in px
-        local totalW = width - BAR_GAP * (n + 1)
+        local showLabels = options and options.showLabels
+        local todayIndex = options and options.todayIndex
+        local labelPad = showLabels and LABEL_PAD or 0
+        local drawH = (graph._height or height) - TOP_PAD - labelPad
+        if drawH < 4 then drawH = 4 end
+        local totalW = (graph._width or width) - BAR_GAP * (n + 1)
         local barW   = math.max(1, math.floor(totalW / n))
 
         for i = 1, n do
@@ -112,6 +128,38 @@ function OrctionBarGraph_Create(parent, width, height)
                 tex:SetAllPoints(b)
                 tex:SetTexture("Interface\\Buttons\\WHITE8X8")
                 b.tex = tex
+
+                local bt = b:CreateTexture(nil, "OVERLAY")
+                bt:SetTexture("Interface\\Buttons\\WHITE8X8")
+                bt:SetHeight(1)
+                bt:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+                bt:SetPoint("TOPRIGHT", b, "TOPRIGHT", 0, 0)
+                bt:SetVertexColor(1, 1, 1, 0.9)
+                b.borderTop = bt
+
+                local bb = b:CreateTexture(nil, "OVERLAY")
+                bb:SetTexture("Interface\\Buttons\\WHITE8X8")
+                bb:SetHeight(1)
+                bb:SetPoint("BOTTOMLEFT", b, "BOTTOMLEFT", 0, 0)
+                bb:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
+                bb:SetVertexColor(1, 1, 1, 0.9)
+                b.borderBottom = bb
+
+                local bl = b:CreateTexture(nil, "OVERLAY")
+                bl:SetTexture("Interface\\Buttons\\WHITE8X8")
+                bl:SetWidth(1)
+                bl:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+                bl:SetPoint("BOTTOMLEFT", b, "BOTTOMLEFT", 0, 0)
+                bl:SetVertexColor(1, 1, 1, 0.9)
+                b.borderLeft = bl
+
+                local br = b:CreateTexture(nil, "OVERLAY")
+                br:SetTexture("Interface\\Buttons\\WHITE8X8")
+                br:SetWidth(1)
+                br:SetPoint("TOPRIGHT", b, "TOPRIGHT", 0, 0)
+                br:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
+                br:SetVertexColor(1, 1, 1, 0.9)
+                b.borderRight = br
 
                 b:SetScript("OnEnter", function()
                     GameTooltip:SetOwner(this, "ANCHOR_CURSOR")
@@ -146,7 +194,7 @@ function OrctionBarGraph_Create(parent, width, height)
             b:SetWidth(barW)
             b:SetHeight(bh)
             b:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT",
-                BAR_GAP + (i - 1) * (barW + BAR_GAP), 1)
+                BAR_GAP + (i - 1) * (barW + BAR_GAP), 1 + labelPad)
 
             if val == 0 then
                 b.tex:SetVertexColor(0.25, 0.25, 0.25, 0.5)
@@ -160,7 +208,39 @@ function OrctionBarGraph_Create(parent, width, height)
                 b.tex:SetVertexColor(r, g, bl, 0.85)
             end
 
+            if todayIndex and i == todayIndex then
+                b.borderTop:Show()
+                b.borderBottom:Show()
+                b.borderLeft:Show()
+                b.borderRight:Show()
+            else
+                b.borderTop:Hide()
+                b.borderBottom:Hide()
+                b.borderLeft:Hide()
+                b.borderRight:Hide()
+            end
+
             b:Show()
+
+            if showLabels then
+                if not labelFrames[i] then
+                    local lbl = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                    if lbl.SetFont then
+                        lbl:SetFont("Fonts\\FRIZQT__.TTF", 8)
+                    end
+                    labelFrames[i] = lbl
+                end
+                local lbl = labelFrames[i]
+                lbl:SetText(b._colName or "")
+                if options and options.labelColors and options.labelColors[i] then
+                    local c = options.labelColors[i]
+                    lbl:SetTextColor(c[1] or 1, c[2] or 1, c[3] or 1)
+                else
+                    lbl:SetTextColor(0.8, 0.8, 0.8)
+                end
+                lbl:SetPoint("TOP", b, "BOTTOM", 0, -1)
+                lbl:Show()
+            end
         end
 
         activeCount = n

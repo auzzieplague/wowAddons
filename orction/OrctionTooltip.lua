@@ -69,7 +69,16 @@ local function OrctionTooltip_ShowGraph(tooltip, entry)
     graph.frame:SetParent(tooltip)
     graph.frame:ClearAllPoints()
     graph.frame:SetPoint("TOPLEFT", tooltip, "BOTTOMLEFT", 0, -2)
-    graph:SetData(values, {"1","2","3","4","5","6","7"}, "positive", counts)
+    graph:SetSize(180, 38)
+    local w = tonumber(date("%w")) or 0
+    local todayIndex = w + 1
+    local labelColors = {}
+    labelColors[todayIndex] = { 1, 0.82, 0 }
+    graph:SetData(values, {"S","M","T","W","T","F","S"}, "positive", counts, {
+        showLabels = true,
+        todayIndex = todayIndex,
+        labelColors = labelColors,
+    })
 end
 
 local function OrctionTooltip_HideGraph()
@@ -84,16 +93,20 @@ local function OrctionTooltip_Apply(tooltip, itemName, context, stackCount, item
     local name = itemName or OrctionTooltip_GetItemName(tip)
     if not name then return end
 
-    local price = OrctionVendor_GetPrice(name)
+    local price = OrctionVendor_GetPrice(name, itemId)
     if price and price > 0 then
-        local count = tonumber(stackCount) or 1
-        if count > 1 then
-            tip:AddLine(
-                Orction_FormatMoney(price) ..
-                " [" .. Orction_FormatMoney(price * count) .. "]",
-                1, 0.82, 0)
-        else
-            tip:AddLine(Orction_FormatMoney(price), 1, 0.82, 0)
+        if not (tip.OrctionVendorDone and tip.OrctionVendorItem == name) then
+            local count = tonumber(stackCount) or 1
+            if count > 1 then
+                tip:AddLine(
+                    Orction_FormatMoney(price) ..
+                    " [" .. Orction_FormatMoney(price * count) .. "]",
+                    1, 0.82, 0)
+            else
+                tip:AddLine(Orction_FormatMoney(price), 1, 0.82, 0)
+            end
+            tip.OrctionVendorDone = true
+            tip.OrctionVendorItem = name
         end
     end
 
@@ -206,10 +219,134 @@ if AuctionFrameItem_OnEnter then
     end
 end
 
+-- Quest reward/quest log tooltips
+if GameTooltip and GameTooltip.SetQuestItem then
+    local orig_SetQuestItem = GameTooltip.SetQuestItem
+    GameTooltip.SetQuestItem = function(self, questType, index)
+        local ret = orig_SetQuestItem(self, questType, index)
+        local itemId = nil
+        local name = nil
+        if GetQuestItemLink then
+            local link = GetQuestItemLink(questType, index)
+            itemId = OrctionTooltip_ParseItemId(link)
+        end
+        if GetQuestItemInfo then
+            name = GetQuestItemInfo(questType, index)
+        end
+        OrctionTooltip_Apply(self, name, "quest", nil, itemId)
+        return ret
+    end
+end
+
+if GameTooltip and GameTooltip.SetQuestLogItem then
+    local orig_SetQuestLogItem = GameTooltip.SetQuestLogItem
+    GameTooltip.SetQuestLogItem = function(self, itemType, index)
+        local ret = orig_SetQuestLogItem(self, itemType, index)
+        local itemId = nil
+        local name = nil
+        if GetQuestLogItemLink then
+            local link = GetQuestLogItemLink(itemType, index)
+            itemId = OrctionTooltip_ParseItemId(link)
+        end
+        if GetQuestLogItemInfo then
+            name = GetQuestLogItemInfo(itemType, index)
+        end
+        OrctionTooltip_Apply(self, name, "questlog", nil, itemId)
+        return ret
+    end
+end
+
+if QuestLogItem_OnEnter then
+    local orig_QuestLogItem_OnEnter = QuestLogItem_OnEnter
+    QuestLogItem_OnEnter = function(...)
+        local ret = orig_QuestLogItem_OnEnter(unpack(arg))
+        local idx = this and this.GetID and this:GetID() or nil
+        if idx then
+            local itemId = nil
+            local name = nil
+            if GetQuestLogItemLink then
+                local link = GetQuestLogItemLink("reward", idx)
+                itemId = OrctionTooltip_ParseItemId(link)
+            end
+            if GetQuestLogItemInfo then
+                name = GetQuestLogItemInfo("reward", idx)
+            end
+            OrctionTooltip_Apply(GameTooltip, name, "questlog", nil, itemId)
+        end
+        return ret
+    end
+end
+
+local function OrctionTooltip_HookQuestLogRewardButtons()
+    if not QuestLogFrame then return end
+    for i = 1, 10 do
+        local btn = getglobal("QuestLogItem" .. i)
+        if btn and not btn.OrctionHooked then
+            btn.OrctionHooked = true
+            btn.OrctionOrigOnEnter = btn:GetScript("OnEnter")
+            btn.OrctionOrigOnLeave = btn:GetScript("OnLeave")
+            btn:SetScript("OnEnter", function()
+                if btn.OrctionOrigOnEnter then
+                    btn.OrctionOrigOnEnter()
+                elseif GameTooltip and GameTooltip.SetQuestLogItem then
+                    GameTooltip:SetOwner(btn, "ANCHOR_RIGHT")
+                    local idx = btn.GetID and btn:GetID() or i
+                    GameTooltip:SetQuestLogItem("reward", idx)
+                end
+                local idx = btn.GetID and btn:GetID() or i
+                local itemId = nil
+                local name = nil
+                if GetQuestLogItemLink then
+                    local link = GetQuestLogItemLink("reward", idx)
+                    itemId = OrctionTooltip_ParseItemId(link)
+                end
+                if GetQuestLogItemInfo then
+                    name = GetQuestLogItemInfo("reward", idx)
+                end
+                OrctionTooltip_Apply(GameTooltip, name, "questlog", nil, itemId)
+            end)
+            btn:SetScript("OnLeave", function()
+                if btn.OrctionOrigOnLeave then
+                    btn.OrctionOrigOnLeave()
+                elseif GameTooltip then
+                    GameTooltip:Hide()
+                end
+            end)
+        end
+    end
+end
+
+local questLogHookFrame = CreateFrame("Frame")
+questLogHookFrame:RegisterEvent("QUEST_LOG_UPDATE")
+questLogHookFrame:SetScript("OnEvent", function()
+    OrctionTooltip_HookQuestLogRewardButtons()
+end)
+
+-- Merchant tooltips
+if GameTooltip and GameTooltip.SetMerchantItem then
+    local orig_SetMerchantItem = GameTooltip.SetMerchantItem
+    GameTooltip.SetMerchantItem = function(self, index)
+        local ret = orig_SetMerchantItem(self, index)
+        local itemId = nil
+        local name = nil
+        if GetMerchantItemLink then
+            local link = GetMerchantItemLink(index)
+            itemId = OrctionTooltip_ParseItemId(link)
+        end
+        if GetMerchantItemInfo then
+            name = GetMerchantItemInfo(index)
+        end
+        OrctionTooltip_Apply(self, name, "merchant", nil, itemId)
+        return ret
+    end
+end
+
 if GameTooltip then
     local orig_OnHide = GameTooltip:GetScript("OnHide")
     GameTooltip:SetScript("OnHide", function()
         OrctionTooltip_HideGraph()
+        GameTooltip.OrctionVendorDone = nil
+        GameTooltip.OrctionVendorItem = nil
         if orig_OnHide then orig_OnHide() end
     end)
 end

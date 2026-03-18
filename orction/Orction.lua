@@ -2455,6 +2455,7 @@ eventFrame:SetScript("OnEvent", function()
             OrctionDB = OrctionDB or {}
             OrctionDB.stackCounts   = OrctionDB.stackCounts   or {}
             OrctionDB.vendorPrices  = OrctionDB.vendorPrices  or {}
+            OrctionDB.vendorPricesById = OrctionDB.vendorPricesById or {}
             DEFAULT_CHAT_FRAME:AddMessage(ADDON_NAME .. " initialised")
             Orction_HookVendorPriceTooltip()
             if not Orction_ErrorHandlerInstalled and seterrorhandler then

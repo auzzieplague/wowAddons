@@ -6,6 +6,8 @@
 ## SavedVariables: OrctionDB
 
 Database.lua
+OrctionInformantImport.lua
+InfData.lua
 OrctionSync.lua
 DataManagement.lua
 OrctionPostbox.lua

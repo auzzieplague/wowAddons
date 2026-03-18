@@ -51,10 +51,13 @@ end
 
 -- Returns vendor sell price in copper, or 0 if unknown.
 -- Checks OrctionDB cache first, then scans bags against SellValues DB.
-function OrctionVendor_GetPrice(itemName)
+function OrctionVendor_GetPrice(itemName, itemId)
     if not itemName or itemName == "" then return 0 end
 
     -- Check persistent cache
+    if itemId and OrctionDB and OrctionDB.vendorPricesById and OrctionDB.vendorPricesById[itemId] then
+        return OrctionDB.vendorPricesById[itemId]
+    end
     if OrctionDB and OrctionDB.vendorPrices and OrctionDB.vendorPrices[itemName] then
         return OrctionDB.vendorPrices[itemName]
     end
