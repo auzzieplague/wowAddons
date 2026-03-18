@@ -42,7 +42,7 @@ local orctionTooltipState = {
 
 local function OrctionTooltip_ParseItemId(link)
     if not link then return nil end
-    local id = string.match(link, "item:(%d+)")
+    local _, _, id = string.find(link, "item:(%d+)")
     if id then return tonumber(id) end
     return nil
 end

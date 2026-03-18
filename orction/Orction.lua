@@ -183,6 +183,16 @@ local function Orction_GetSubClassName(classIndex, subIndex)
     return subs[subIndex] or "None"
 end
 
+local function Orction_GetCategoryLabel()
+    local catName = Orction_GetClassName(orctionSearchClassIndex)
+    local catLabel = (catName ~= "None") and catName or "All"
+    if orctionSearchSubIndex and orctionSearchSubIndex > 0 then
+        local sub = Orction_GetSubClassName(orctionSearchClassIndex, orctionSearchSubIndex)
+        if sub and sub ~= "None" then catLabel = catLabel .. " > " .. sub end
+    end
+    return catLabel
+end
+
 local function Orction_SetSearchCategory(classIndex, subIndex)
     orctionSearchClassIndex = classIndex or 0
     orctionSearchSubIndex   = subIndex or 0
@@ -418,11 +428,11 @@ local Orction_PreviewItem     -- forward declaration; defined below
 -- Column constants mirror those in Orction_BuildAHPanel.
 local RC_COL_ICON = 6
 local RC_COL_NAME = 34
-local RC_COL1     = 178
-local RC_COL2     = 318
-local RC_COL3     = 412
-local RC_COL4     = 458
-local RC_COL5     = 544
+local RC_COL_WL   = 138  -- WL+ button column
+local RC_COL1     = 174  -- cost / item
+local RC_COL2     = 278  -- available
+local RC_COL3     = 356  -- auctions
+local RC_COL4     = 420  -- buy button
 local RC_ROW_H    = 37
 local RC_ROW_W    = 578
 
@@ -456,7 +466,7 @@ local function Orction_CreateResultRow(i)
 
     local nameFS = rowBtn:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
     nameFS:SetPoint("TOPLEFT", rowBtn, "TOPLEFT", RC_COL_NAME, -13)
-    nameFS:SetWidth(138)
+    nameFS:SetWidth(100)
     nameFS:SetJustifyH("LEFT")
 
     local costFS = rowBtn:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
@@ -480,9 +490,9 @@ local function Orction_CreateResultRow(i)
     end
 
     local wlBtn = CreateFrame("Button", nil, rowBtn, "UIPanelButtonTemplate")
-    wlBtn:SetWidth(30)
+    wlBtn:SetWidth(32)
     wlBtn:SetHeight(22)
-    wlBtn:SetPoint("LEFT", rowBtn, "LEFT", RC_COL5, 0)
+    wlBtn:SetPoint("LEFT", rowBtn, "LEFT", RC_COL_WL, 0)
     wlBtn:SetText("WL+")
     local wlBtnFS = wlBtn:GetFontString()
     if wlBtnFS then
@@ -537,7 +547,7 @@ local function Orction_CreateResultRow(i)
         if not orctionSellName then
             -- No item in sell slot: preview the clicked item in the post panel
             if row.itemName then
-                Orction_PreviewItem(row.itemName, row.texture)
+                Orction_PreviewItem(row.itemName, row.texture, row.vendorPrice)
             end
         else
             -- Item dropped: fill buyout price
@@ -553,7 +563,7 @@ local function Orction_CreateResultRow(i)
                               nameFS = nameFS, iconTex = iconTex, profitFS = profitFS,
                               isEven = (math.mod(i, 2) == 0),
                               costPerItem = nil, firstBuyout = nil, itemName = nil, itemId = nil,
-                              texture = nil }
+                              texture = nil, vendorPrice = nil }
 
     rowBtn:SetScript("OnEnter", function()
         local row = orctionResultRows[idx]
@@ -729,7 +739,8 @@ local function Orction_DisplayResults()
             row.itemName    = g.name
             row.itemId      = g.itemId
             row.texture     = g.texture
-            row.cost:SetText(CopperToString(g.costPerItem))
+            row.vendorPrice = g.vendorPrice
+            row.cost:SetText(FormatMoneyColour(g.costPerItem))
             row.qty:SetText(tostring(g.totalCount))
             row.auctions:SetText(tostring(g.numAuctions))
             if row.nameFS  then row.nameFS:SetText(g.name or "") end
@@ -762,6 +773,7 @@ local function Orction_DisplayResults()
             row.itemName    = nil
             row.itemId      = nil
             row.texture     = nil
+            row.vendorPrice = nil
             if row.wlBtn    then row.wlBtn:Hide()    end
             if row.profitFS then row.profitFS:Hide() end
             row.frame:Hide()
@@ -871,11 +883,17 @@ local function Orction_CollectPage()
             orctionFullScanPagesProcessed = orctionFullScanPagesProcessed + 1
             if math.mod(orctionFullScanPagesProcessed, FULL_SCAN_UPDATE_INTERVAL) == 0 then
                 Orction_DisplayResults()
-                -- DisplayResults hides the text; restore it so progress stays visible
                 if OrctionSearchingText then
                     OrctionSearchingText:Show()
                     Orction_UpdateSearchingText()
                 end
+            end
+        elseif not orctionScanMode then
+            -- Regular search: refresh results after every page so user sees progress
+            Orction_DisplayResults()
+            if OrctionSearchingText then
+                OrctionSearchingText:Show()
+                Orction_UpdateSearchingText()
             end
         end
     else
@@ -891,12 +909,7 @@ local function Orction_CollectPage()
             orctionFullScanResultsShowing = true
             Orction_DisplayResults()
             -- Build category label
-            local catName = Orction_GetClassName(orctionSearchClassIndex)
-            local catLabel = (catName ~= "None") and catName or "All"
-            if orctionSearchSubIndex and orctionSearchSubIndex > 0 then
-                local sub = Orction_GetSubClassName(orctionSearchClassIndex, orctionSearchSubIndex)
-                if sub and sub ~= "None" then catLabel = catLabel .. " > " .. sub end
-            end
+            local catLabel = Orction_GetCategoryLabel()
             -- Count unique items queued for recording (datapoints)
             local datapoints = 0
             for _ in pairs(orctionSearchRecorded) do datapoints = datapoints + 1 end
@@ -1125,7 +1138,7 @@ end
 
 -- Populates the post panel with item info from a result row click (no sell-slot item).
 -- Disables Create Auction since nothing is actually queued to sell.
-Orction_PreviewItem = function(name, texture)
+Orction_PreviewItem = function(name, texture, vendorPrice)
     if OrctionItemTexture then
         if texture then
             OrctionItemTexture:SetTexture(texture)
@@ -1135,7 +1148,15 @@ Orction_PreviewItem = function(name, texture)
         end
     end
     if OrctionItemNameText then OrctionItemNameText:SetText(name) end
-    if OrctionCreateBtn    then OrctionCreateBtn:Disable() end
+    if OrctionVendorSellValue then
+        local vp = vendorPrice or 0
+        if vp > 0 then
+            OrctionVendorSellValue:SetText(FormatMoneyColour(vp))
+        else
+            OrctionVendorSellValue:SetText("--")
+        end
+    end
+    if OrctionCreateBtn then OrctionCreateBtn:Disable() end
     Orction_UpdatePriceGraph(name)
 end
 
@@ -1636,9 +1657,8 @@ local function Orction_StartScan()
     Orction_ScanNext()
 end
 
-local function Orction_StartFullScan()
-    -- Full category scan: no page limit, uses active category dropdowns,
-    -- records all prices to history, shows only results below vendor cost.
+-- Extracted to keep Orction_StartFullScan under Lua 5.0's 32-upvalue limit.
+local function Orction_ResetFullScanState()
     orctionScanCancel             = false
     orctionScanMode               = false
     orctionScanResultsShowing     = false
@@ -1670,6 +1690,13 @@ local function Orction_StartFullScan()
     if OrctionNoResultsText      then OrctionNoResultsText:Hide()      end
     if OrctionSimilarResultsText then OrctionSimilarResultsText:Hide() end
     if OrctionSearchingText      then OrctionSearchingText:Show()      end
+end
+
+local function Orction_StartFullScan()
+    Orction_ResetFullScanState()
+    Orction_ResetPostUI()
+    local catLabel = Orction_GetCategoryLabel()
+    DEFAULT_CHAT_FRAME:AddMessage("Orction: scanning [" .. catLabel .. "]...")
     Orction_UpdateSearchingText()
     Orction_SetSearchCategory(orctionSearchClassIndex, orctionSearchSubIndex)
     Orction_Query("", 0)
@@ -2102,10 +2129,10 @@ local function Orction_BuildAHPanel()
     end)
 
     local fullScanBtn = CreateFrame("Button", nil, OrctionAHPanel, "UIPanelButtonTemplate")
-    fullScanBtn:SetWidth(56)
+    fullScanBtn:SetWidth(100)
     fullScanBtn:SetHeight(23)
     fullScanBtn:SetPoint("LEFT", watchlistToggleBtn, "RIGHT", 4, 0)
-    fullScanBtn:SetText("Scan")
+    fullScanBtn:SetText("Category Scan")
     fullScanBtn:SetScript("OnClick", Orction_StartFullScan)
 
     local cancelScanBtn = CreateFrame("Button", nil, OrctionAHPanel, "UIPanelButtonTemplate")
@@ -2276,10 +2303,11 @@ local function Orction_BuildAHPanel()
 
     local COL_ICON_X = 6    -- item icon
     local COL_NAME_X = 34   -- item name
-    local COL1_X     = 178  -- cost per item
-    local COL2_X     = 318  -- total available
-    local COL3_X     = 412  -- # auctions
-    local COL4_X     = 480  -- buy button x
+    local COL_WL_X   = 138  -- WL+ button
+    local COL1_X     = 174  -- cost per item
+    local COL2_X     = 278  -- total available
+    local COL3_X     = 356  -- # auctions
+    local COL4_X     = 420  -- buy button x
     local HEADER_Y   = -81
     local ROW_H      = 37
     local ROW_W      = 578
