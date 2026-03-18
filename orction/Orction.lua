@@ -412,6 +412,7 @@ local function Orction_HookVendorPriceTooltip()
 end
 
 local Orction_AddToWatchlist  -- forward declaration; defined below
+local Orction_PreviewItem     -- forward declaration; defined below
 
 -- ── Result row factory (called lazily from Orction_DisplayResults) ────────
 -- Column constants mirror those in Orction_BuildAHPanel.
@@ -532,9 +533,18 @@ local function Orction_CreateResultRow(i)
 
     rowBtn:SetScript("OnClick", function()
         local row = orctionResultRows[idx]
-        if row and row.costPerItem then
-            local count = math.max(1, tonumber(OrctionCountBox:GetText()) or 1)
-            MoneyInputFrame_SetCopper(OrctionBuyout, row.costPerItem * count)
+        if not row then return end
+        if not orctionSellName then
+            -- No item in sell slot: preview the clicked item in the post panel
+            if row.itemName then
+                Orction_PreviewItem(row.itemName, row.texture)
+            end
+        else
+            -- Item dropped: fill buyout price
+            if row.costPerItem then
+                local count = math.max(1, tonumber(OrctionCountBox:GetText()) or 1)
+                MoneyInputFrame_SetCopper(OrctionBuyout, row.costPerItem * count)
+            end
         end
     end)
 
@@ -542,7 +552,8 @@ local function Orction_CreateResultRow(i)
                               auctions = aucFS, buyBtn = buyBtn, wlBtn = wlBtn, bg = bg,
                               nameFS = nameFS, iconTex = iconTex, profitFS = profitFS,
                               isEven = (math.mod(i, 2) == 0),
-                              costPerItem = nil, firstBuyout = nil, itemName = nil, itemId = nil }
+                              costPerItem = nil, firstBuyout = nil, itemName = nil, itemId = nil,
+                              texture = nil }
 
     rowBtn:SetScript("OnEnter", function()
         local row = orctionResultRows[idx]
@@ -717,6 +728,7 @@ local function Orction_DisplayResults()
             row.firstBuyout = g.firstBuyout
             row.itemName    = g.name
             row.itemId      = g.itemId
+            row.texture     = g.texture
             row.cost:SetText(CopperToString(g.costPerItem))
             row.qty:SetText(tostring(g.totalCount))
             row.auctions:SetText(tostring(g.numAuctions))
@@ -749,6 +761,7 @@ local function Orction_DisplayResults()
             row.firstBuyout = nil
             row.itemName    = nil
             row.itemId      = nil
+            row.texture     = nil
             if row.wlBtn    then row.wlBtn:Hide()    end
             if row.profitFS then row.profitFS:Hide() end
             row.frame:Hide()
@@ -1110,6 +1123,22 @@ local function Orction_UpdatePriceGraph(name)
     orctionPriceBarGraph:SetData(values, colNames, "positive", counts)
 end
 
+-- Populates the post panel with item info from a result row click (no sell-slot item).
+-- Disables Create Auction since nothing is actually queued to sell.
+Orction_PreviewItem = function(name, texture)
+    if OrctionItemTexture then
+        if texture then
+            OrctionItemTexture:SetTexture(texture)
+            OrctionItemTexture:Show()
+        else
+            OrctionItemTexture:Hide()
+        end
+    end
+    if OrctionItemNameText then OrctionItemNameText:SetText(name) end
+    if OrctionCreateBtn    then OrctionCreateBtn:Disable() end
+    Orction_UpdatePriceGraph(name)
+end
+
 -- Called when user drops an item onto the slot.
 -- ClearCursor is reliable when cursor item came from a bag (returns to source bag slot).
 -- We scan empty slots before + after to identify which slot the item returned to,
@@ -1126,6 +1155,7 @@ local function Orction_CompleteItemDrop(name, texture, count)
     end
     if OrctionDB then OrctionDB.stackCounts[name] = count end
     orctionSellName = name
+    if OrctionCreateBtn then OrctionCreateBtn:Enable() end
     if OrctionSearchBox then OrctionSearchBox:SetText(name) end
     orctionVendorPrice = Orction_GetVendorPrice(name)
     Orction_UpdateDeposit()
@@ -1260,7 +1290,7 @@ local function Orction_ResetPostUI()
     if OrctionTotalFeeValue then OrctionTotalFeeValue:SetText("") end
     if OrctionProfitValue   then OrctionProfitValue:SetText("") end
     if OrctionVendorSellValue then OrctionVendorSellValue:SetText("--") end
-    if OrctionCreateBtn     then OrctionCreateBtn:SetText("Create Auction") end
+    if OrctionCreateBtn     then OrctionCreateBtn:SetText("Create Auction") ; OrctionCreateBtn:Disable() end
     if orctionPriceBarGraph then orctionPriceBarGraph:Hide() end
     orctionSellName    = nil
     orctionVendorPrice = nil
@@ -2053,6 +2083,7 @@ local function Orction_BuildAHPanel()
     OrctionCreateBtn:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 35, -248)
     OrctionCreateBtn:SetText("Create Auction")
     OrctionCreateBtn:SetScript("OnClick", Orction_CreateAuction)
+    OrctionCreateBtn:Disable()
 
     -- Price history bar graph (positioned below the Create Auction button)
     orctionPriceBarGraph = OrctionBarGraph_Create(OrctionAHPanel, 196, 64)

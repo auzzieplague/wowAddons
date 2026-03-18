@@ -10,7 +10,7 @@ OrctionSync.lua
 DataManagement.lua
 OrctionPostbox.lua
 OrctionVendor.lua
+OrctionBarGraph.lua
 OrctionTooltip.lua
 OrctionSettings.lua
-OrctionBarGraph.lua
 Orction.lua
