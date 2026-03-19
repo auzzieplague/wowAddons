@@ -609,32 +609,44 @@ end
 Orction_ShowVendorInfo = function(row)
     if not row then return end
     local buy = row.vendorBuy or 0
-    local merchants = row.vendorMerchants
-    if (buy == 0 and (not merchants or merchants == "")) and OrctionVendor_GetBuyInfo then
-        buy, merchants = OrctionVendor_GetBuyInfo(row.itemId, row.itemName)
+    local rawMerchants = row.vendorMerchants
+    if (buy == 0 and (not rawMerchants or rawMerchants == "")) and OrctionVendor_GetBuyInfo then
+        buy, rawMerchants = OrctionVendor_GetBuyInfo(row.itemId, row.itemName)
     end
+    -- Resolve raw merchants string (may contain old numeric IDs) to actual names
+    local merchants = OrctionVendor_ResolveMerchants and OrctionVendor_ResolveMerchants(rawMerchants) or ""
     local ah = row.costPerItem or 0
 
     local lines = {}
     if row.itemName and row.itemName ~= "" then
         table.insert(lines, row.itemName)
     end
-    if merchants and merchants ~= "" then
-        table.insert(lines, "Sold by: " .. merchants)
-    end
-    if buy > 0 then
+
+    -- List each vendor on its own line
+    if merchants ~= "" then
+        for vendor in string.gfind(merchants .. ",", "([^,]+),") do
+            vendor = string.gsub(vendor, "^%s*(.-)%s*$", "%1")
+            if vendor ~= "" then
+                if buy > 0 then
+                    table.insert(lines, vendor .. "  (" .. Orction_FormatMoney(buy) .. ")")
+                else
+                    table.insert(lines, vendor)
+                end
+            end
+        end
+    elseif buy > 0 then
         table.insert(lines, "Vendor price: " .. Orction_FormatMoney(buy))
     end
+
     if ah > 0 then
-        table.insert(lines, "AH buyout:    " .. Orction_FormatMoney(ah))
+        table.insert(lines, "AH buyout: " .. Orction_FormatMoney(ah))
     end
     if buy > 0 and ah > 0 then
         local diff = ah - buy
         local sign = diff >= 0 and "+" or "-"
-        table.insert(lines, "Difference:   " .. sign .. Orction_FormatMoney(math.abs(diff)))
+        table.insert(lines, "Saving: " .. sign .. Orction_FormatMoney(math.abs(diff)))
     end
-    local text = table.concat(lines, "\n")
-    StaticPopup_Show("ORCTION_VENDOR_INFO", text)
+    StaticPopup_Show("ORCTION_VENDOR_INFO", table.concat(lines, "\n"))
 end
 
 -- ── Search logic ──────────────────────────────────────────────────────────
@@ -823,8 +835,10 @@ local function Orction_DisplayResults()
                     row.profitFS:Show()
                 end
                 if row.infoBtn then row.infoBtn:Hide() end
-            elseif g.vendorSold then
-                -- Sold by vendor (not profitable to flip): red warning
+            elseif g.vendorSold and g.vendorBuy and g.vendorBuy > 0 and g.vendorBuy < g.costPerItem
+                    and OrctionVendor_ResolveMerchants
+                    and OrctionVendor_ResolveMerchants(g.vendorMerchants) ~= "" then
+                -- Cheaper to buy from a known vendor than on the AH: red warning
                 row.bg:SetTexture(0.4, 0, 0, 0.55)
                 if row.profitFS then row.profitFS:Hide() end
                 if row.infoBtn then row.infoBtn:Show() end
@@ -989,27 +1003,7 @@ local function Orction_CollectPage()
             orctionScanNextPending = true
             orctionScanNextDelay   = 0
         elseif orctionFullScanActive then
-            orctionFullScanActive         = false
-            orctionFullScanResultsShowing = true
-            Orction_DisplayResults()
-            if OrctionSearchingText then OrctionSearchingText:SetText("Scan complete") ; OrctionSearchingText:Show() end
-            -- Build category label
-            local catLabel = Orction_GetCategoryLabel()
-            -- Count unique items queued for recording (datapoints)
-            local datapoints = 0
-            for _ in pairs(orctionSearchRecorded) do datapoints = datapoints + 1 end
-            -- Count unique item names below vendor price
-            local belowNames = {}
-            for _, r in ipairs(orctionSimilarResults) do
-                if r.vendorPrice and r.vendorPrice > 0 and r.costPerItem < r.vendorPrice then
-                    belowNames[r.name or "?"] = true
-                end
-            end
-            local below = 0
-            for _ in pairs(belowNames) do below = below + 1 end
-            DEFAULT_CHAT_FRAME:AddMessage(
-                "Orction: Scanned [" .. catLabel .. "] - recorded " .. datapoints ..
-                " new datapoints, found " .. below .. " items under vendor cost - see above")
+            Orction_FinishFullScan()
         else
             Orction_DisplayResults()
             if OrctionSearchingText then OrctionSearchingText:SetText("Search complete") ; OrctionSearchingText:Show() end
@@ -1751,6 +1745,29 @@ local function Orction_StartScan()
     Orction_ScanNext()
 end
 
+-- Called from both Orction_CollectPage and the OnUpdate timeout path so that
+-- full-scan completion is handled identically regardless of which path finishes last.
+local function Orction_FinishFullScan()
+    orctionFullScanActive         = false
+    orctionFullScanResultsShowing = true
+    Orction_DisplayResults()
+    if OrctionSearchingText then OrctionSearchingText:SetText("Scan complete") ; OrctionSearchingText:Show() end
+    local catLabel   = Orction_GetCategoryLabel()
+    local datapoints = 0
+    for _ in pairs(orctionSearchRecorded) do datapoints = datapoints + 1 end
+    local belowNames = {}
+    for _, r in ipairs(orctionSimilarResults) do
+        if r.vendorPrice and r.vendorPrice > 0 and r.costPerItem < r.vendorPrice then
+            belowNames[r.name or "?"] = true
+        end
+    end
+    local below = 0
+    for _ in pairs(belowNames) do below = below + 1 end
+    DEFAULT_CHAT_FRAME:AddMessage(
+        "Orction: Scanned [" .. catLabel .. "] - recorded " .. datapoints ..
+        " new datapoints, found " .. below .. " items under vendor cost - see above")
+end
+
 -- Extracted to keep Orction_StartFullScan under Lua 5.0's 32-upvalue limit.
 local function Orction_ResetFullScanState()
     orctionScanCancel             = false
@@ -1898,8 +1915,11 @@ local function Orction_AHPanel_OnUpdate()
                 if orctionScanMode then
                     orctionScanNextPending = true
                     orctionScanNextDelay   = 0
+                elseif orctionFullScanActive then
+                    Orction_FinishFullScan()
                 else
                     Orction_DisplayResults()
+                    if OrctionSearchingText then OrctionSearchingText:SetText("Search complete") ; OrctionSearchingText:Show() end
                 end
             end
         end

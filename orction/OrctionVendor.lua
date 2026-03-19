@@ -91,3 +91,29 @@ function OrctionVendor_GetBuyInfo(itemId, itemName)
     end
     return 0, nil
 end
+
+-- Resolves a raw merchants string (which may contain numeric IDs from old DB data)
+-- to a comma-separated string of actual vendor names.
+-- Uses OrctionInformantVendors if available. Returns "" if nothing resolves.
+function OrctionVendor_ResolveMerchants(raw)
+    if not raw or raw == "" then return "" end
+    local names = {}
+    for part in string.gfind(raw .. ",", "([^,]+),") do
+        part = string.gsub(part, "^%s*(.-)%s*$", "%1")
+        if part ~= "" then
+            local id = tonumber(part)
+            if id then
+                -- Numeric: look up in Informant vendors table if available
+                local vname = OrctionInformantVendors and OrctionInformantVendors[id]
+                if vname and vname ~= "" then
+                    table.insert(names, vname)
+                end
+                -- If no vendors table, skip raw numeric IDs entirely
+            else
+                -- Already a name (from current import or manually stored)
+                table.insert(names, part)
+            end
+        end
+    end
+    return table.concat(names, ",")
+end
