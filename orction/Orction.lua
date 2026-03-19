@@ -423,6 +423,7 @@ end
 
 local Orction_AddToWatchlist  -- forward declaration; defined below
 local Orction_PreviewItem     -- forward declaration; defined below
+local Orction_ShowVendorInfo  -- forward declaration; defined below
 
 -- ── Result row factory (called lazily from Orction_DisplayResults) ────────
 -- Column constants mirror those in Orction_BuildAHPanel.
@@ -433,6 +434,7 @@ local RC_COL1     = 174  -- cost / item
 local RC_COL2     = 278  -- available
 local RC_COL3     = 356  -- auctions
 local RC_COL4     = 420  -- buy button
+local RC_COL_INFO = 506  -- info button
 local RC_ROW_H    = 37
 local RC_ROW_W    = 578
 
@@ -505,6 +507,18 @@ local function Orction_CreateResultRow(i)
     profitFS:SetPoint("LEFT", buyBtn, "RIGHT", 6, 0)
     profitFS:Hide()
 
+    local infoBtn = CreateFrame("Button", nil, rowBtn, "UIPanelButtonTemplate")
+    infoBtn:SetWidth(40)
+    infoBtn:SetHeight(22)
+    infoBtn:SetPoint("LEFT", rowBtn, "LEFT", RC_COL_INFO, 0)
+    infoBtn:SetText("Info")
+    local infoBtnFS = infoBtn:GetFontString()
+    if infoBtnFS then
+        local fontFile, _, flags = infoBtnFS:GetFont()
+        infoBtnFS:SetFont(fontFile or STANDARD_TEXT_FONT, 8, flags or "")
+    end
+    infoBtn:Hide()
+
     local idx = i
     buyBtn:SetScript("OnClick", function()
         local row = orctionResultRows[idx]
@@ -541,6 +555,18 @@ local function Orction_CreateResultRow(i)
         end
     end)
 
+    infoBtn:SetScript("OnMouseDown", function() this:GetParent():SetScript("OnClick", nil) end)
+    infoBtn:SetScript("OnMouseUp", function()
+        this:GetParent():SetScript("OnClick", function()
+            local row = orctionResultRows[idx]
+            if row then Orction_ShowVendorInfo(row) end
+        end)
+    end)
+    infoBtn:SetScript("OnClick", function()
+        local row = orctionResultRows[idx]
+        if row then Orction_ShowVendorInfo(row) end
+    end)
+
     rowBtn:SetScript("OnClick", function()
         local row = orctionResultRows[idx]
         if not row then return end
@@ -560,10 +586,10 @@ local function Orction_CreateResultRow(i)
 
     orctionResultRows[i] = { frame = rowBtn, cost = costFS, qty = qtyFS,
                               auctions = aucFS, buyBtn = buyBtn, wlBtn = wlBtn, bg = bg,
-                              nameFS = nameFS, iconTex = iconTex, profitFS = profitFS,
+                              nameFS = nameFS, iconTex = iconTex, profitFS = profitFS, infoBtn = infoBtn,
                               isEven = (math.mod(i, 2) == 0),
                               costPerItem = nil, firstBuyout = nil, itemName = nil, itemId = nil,
-                              texture = nil, vendorPrice = nil }
+                              texture = nil, vendorPrice = nil, vendorBuy = nil, vendorMerchants = nil, vendorSold = nil }
 
     rowBtn:SetScript("OnEnter", function()
         local row = orctionResultRows[idx]
@@ -578,6 +604,37 @@ local function Orction_CreateResultRow(i)
     end)
 
     rowBtn:Hide()
+end
+
+Orction_ShowVendorInfo = function(row)
+    if not row then return end
+    local buy = row.vendorBuy or 0
+    local merchants = row.vendorMerchants
+    if (buy == 0 and (not merchants or merchants == "")) and OrctionVendor_GetBuyInfo then
+        buy, merchants = OrctionVendor_GetBuyInfo(row.itemId, row.itemName)
+    end
+    local ah = row.costPerItem or 0
+
+    local lines = {}
+    if row.itemName and row.itemName ~= "" then
+        table.insert(lines, row.itemName)
+    end
+    if merchants and merchants ~= "" then
+        table.insert(lines, "Sold by: " .. merchants)
+    end
+    if buy > 0 then
+        table.insert(lines, "Vendor price: " .. Orction_FormatMoney(buy))
+    end
+    if ah > 0 then
+        table.insert(lines, "AH buyout:    " .. Orction_FormatMoney(ah))
+    end
+    if buy > 0 and ah > 0 then
+        local diff = ah - buy
+        local sign = diff >= 0 and "+" or "-"
+        table.insert(lines, "Difference:   " .. sign .. Orction_FormatMoney(math.abs(diff)))
+    end
+    local text = table.concat(lines, "\n")
+    StaticPopup_Show("ORCTION_VENDOR_INFO", text)
 end
 
 -- ── Search logic ──────────────────────────────────────────────────────────
@@ -631,6 +688,9 @@ local function Orction_DisplayResults()
                             itemId      = item.itemId,
                             costPerItem = item.costPerItem,
                             vendorPrice = item.vendorPrice or 0,
+                            vendorBuy   = item.vendorBuy or 0,
+                            vendorMerchants = item.vendorMerchants,
+                            vendorSold  = (item.vendorBuy and item.vendorBuy > 0) or (item.vendorMerchants and item.vendorMerchants ~= ""),
                             totalCount  = 0, numAuctions = 0,
                             firstBuyout = item.buyout,
                             firstCount  = item.count }
@@ -645,6 +705,9 @@ local function Orction_DisplayResults()
             groupMap[k].firstCount  = item.count
             groupMap[k].texture     = item.texture
             groupMap[k].vendorPrice = item.vendorPrice or 0
+            groupMap[k].vendorBuy   = item.vendorBuy or 0
+            groupMap[k].vendorMerchants = item.vendorMerchants
+            groupMap[k].vendorSold  = (item.vendorBuy and item.vendorBuy > 0) or (item.vendorMerchants and item.vendorMerchants ~= "")
         end
     end
     table.sort(groups, function(a, b) return a.costPerItem < b.costPerItem end)
@@ -739,6 +802,9 @@ local function Orction_DisplayResults()
             row.itemId      = g.itemId
             row.texture     = g.texture
             row.vendorPrice = g.vendorPrice
+            row.vendorBuy   = g.vendorBuy
+            row.vendorMerchants = g.vendorMerchants
+            row.vendorSold  = g.vendorSold
             row.cost:SetText(FormatMoneyColour(g.costPerItem))
             row.qty:SetText(tostring(g.totalCount))
             row.auctions:SetText(tostring(g.numAuctions))
@@ -749,16 +815,24 @@ local function Orction_DisplayResults()
             end
             local btnLabel = "|cFFFFFFFF" .. tostring(g.firstCount) .. " for |r" .. FormatMoneyColour(g.costPerItem * g.firstCount)
             if g.vendorPrice and g.vendorPrice > 0 and g.costPerItem < g.vendorPrice then
+                -- Below vendor cost: green (profitable) takes priority
                 row.bg:SetTexture(0, 0.35, 0, 0.55)
                 if row.profitFS then
                     local profit = g.vendorPrice - g.costPerItem
                     row.profitFS:SetText("|cFF00FF00+" .. FormatMoneyColour(profit) .. "|r")
                     row.profitFS:Show()
                 end
+                if row.infoBtn then row.infoBtn:Hide() end
+            elseif g.vendorSold then
+                -- Sold by vendor (not profitable to flip): red warning
+                row.bg:SetTexture(0.4, 0, 0, 0.55)
+                if row.profitFS then row.profitFS:Hide() end
+                if row.infoBtn then row.infoBtn:Show() end
             else
                 if row.isEven then row.bg:SetTexture(0.09, 0.09, 0.19, 0.5)
                 else                row.bg:SetTexture(0, 0, 0.09, 0.3) end
                 if row.profitFS then row.profitFS:Hide() end
+                if row.infoBtn then row.infoBtn:Hide() end
             end
             row.buyBtn:SetText(btnLabel)
             if row.wlBtn then
@@ -773,8 +847,12 @@ local function Orction_DisplayResults()
             row.itemId      = nil
             row.texture     = nil
             row.vendorPrice = nil
+            row.vendorBuy   = nil
+            row.vendorMerchants = nil
+            row.vendorSold  = nil
             if row.wlBtn    then row.wlBtn:Hide()    end
             if row.profitFS then row.profitFS:Hide() end
+            if row.infoBtn then row.infoBtn:Hide() end
             row.frame:Hide()
         end
     end
@@ -841,6 +919,11 @@ local function Orction_CollectPage()
                 local _, _, id = string.find(link, "item:(%d+)")
                 if id then itemId = tonumber(id) end
             end
+            local vendorBuy = 0
+            local vendorMerchants = nil
+            if OrctionVendor_GetBuyInfo then
+                vendorBuy, vendorMerchants = OrctionVendor_GetBuyInfo(itemId, name)
+            end
             local entry = {
                 name        = name,
                 itemId      = itemId,
@@ -849,6 +932,8 @@ local function Orction_CollectPage()
                 count       = count,
                 costPerItem = math.floor(buyoutPrice / count),
                 vendorPrice = vPrice,
+                vendorBuy   = vendorBuy,
+                vendorMerchants = vendorMerchants,
             }
             -- Always collect into similar (all results)
             table.insert(orctionSimilarResults, entry)
@@ -1501,6 +1586,14 @@ StaticPopupDialogs["ORCTION_STACK_CONFIRM"] = {
         end
         DEFAULT_CHAT_FRAME:AddMessage("Orction: Stack returned. Shift+click your bag stack to split, then re-drag.")
     end,
+}
+
+StaticPopupDialogs["ORCTION_VENDOR_INFO"] = {
+    text         = "%s",
+    button1      = "OK",
+    timeout      = 0,
+    whileDead    = false,
+    hideOnEscape = true,
 }
 
 -- ── Build the AH panel ────────────────────────────────────────────────────
@@ -2456,6 +2549,8 @@ eventFrame:SetScript("OnEvent", function()
             OrctionDB.stackCounts   = OrctionDB.stackCounts   or {}
             OrctionDB.vendorPrices  = OrctionDB.vendorPrices  or {}
             OrctionDB.vendorPricesById = OrctionDB.vendorPricesById or {}
+            OrctionDB.vendorMerchantById = OrctionDB.vendorMerchantById or {}
+            OrctionDB.vendorMerchantByName = OrctionDB.vendorMerchantByName or {}
             DEFAULT_CHAT_FRAME:AddMessage(ADDON_NAME .. " initialised")
             Orction_HookVendorPriceTooltip()
             if not Orction_ErrorHandlerInstalled and seterrorhandler then

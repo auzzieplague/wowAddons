@@ -855,6 +855,8 @@ clearCacheBtn:SetScript("OnClick", function()
     if OrctionDB then
         OrctionDB.vendorPrices = {}
         OrctionDB.vendorPricesById = {}
+        OrctionDB.vendorMerchantById = {}
+        OrctionDB.vendorMerchantByName = {}
     end
     DEFAULT_CHAT_FRAME:AddMessage("Orction: cache cleared")
 end)
@@ -988,6 +990,8 @@ settingsEventFrame:SetScript("OnEvent", function()
         -- Ensure persistent tables exist
         if not OrctionDB.vendorPrices then OrctionDB.vendorPrices = {} end
         if not OrctionDB.vendorPricesById then OrctionDB.vendorPricesById = {} end
+        if not OrctionDB.vendorMerchantById then OrctionDB.vendorMerchantById = {} end
+        if not OrctionDB.vendorMerchantByName then OrctionDB.vendorMerchantByName = {} end
         if not OrctionDB.watchlist     then OrctionDB.watchlist     = {} end
     end
 end)
