@@ -2289,6 +2289,7 @@ local function Orction_BuildAHPanel()
     OrctionWatchlistDetailsFrame:SetWidth(180)
     OrctionWatchlistDetailsFrame:SetHeight(70)
     OrctionWatchlistDetailsFrame:SetPoint("TOPLEFT", wlFrame, "TOPLEFT", 6, -24)
+    OrctionWatchlistDetailsFrame:SetFrameStrata("DIALOG")
     OrctionWatchlistDetailsFrame:SetFrameLevel(wlFrame:GetFrameLevel() + 2)
     OrctionWatchlistDetailsFrame:SetBackdrop({
         bgFile   = "Interface\\Buttons\\WHITE8X8",
