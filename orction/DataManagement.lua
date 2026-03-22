@@ -1,9 +1,34 @@
 -- DataManagement.lua
 -- Centralized data handling for Orction.
 
+function OrctionData_GetScope()
+    local realm = (GetRealmName and GetRealmName()) or "Unknown"
+    local faction = (UnitFactionGroup and UnitFactionGroup("player")) or "Neutral"
+    return realm, faction
+end
+
 local function OrctionData_EnsureDB()
     OrctionDB = OrctionDB or {}
-    OrctionDB.priceHistory = OrctionDB.priceHistory or {}
+    OrctionDB.priceHistoryByRealm = OrctionDB.priceHistoryByRealm or {}
+    if OrctionDB.priceHistory and not OrctionDB.priceHistoryByRealmMigrated then
+        local realm, faction = OrctionData_GetScope()
+        OrctionDB.priceHistoryByRealm[realm] = OrctionDB.priceHistoryByRealm[realm] or {}
+        OrctionDB.priceHistoryByRealm[realm][faction] = OrctionDB.priceHistoryByRealm[realm][faction] or {}
+        for k, v in pairs(OrctionDB.priceHistory) do
+            OrctionDB.priceHistoryByRealm[realm][faction][k] = v
+        end
+        OrctionDB.priceHistory = nil
+        OrctionDB.priceHistoryByRealmMigrated = true
+    end
+    local realm, faction = OrctionData_GetScope()
+    OrctionDB.priceHistoryByRealm[realm] = OrctionDB.priceHistoryByRealm[realm] or {}
+    OrctionDB.priceHistoryByRealm[realm][faction] = OrctionDB.priceHistoryByRealm[realm][faction] or {}
+end
+
+function OrctionData_GetStore()
+    OrctionData_EnsureDB()
+    local realm, faction = OrctionData_GetScope()
+    return OrctionDB.priceHistoryByRealm[realm][faction]
 end
 
 local function OrctionData_GetDaySlot()
@@ -14,19 +39,21 @@ end
 
 local function OrctionData_GetPriceEntry(itemId, name)
     OrctionData_EnsureDB()
+    local store = OrctionData_GetStore()
     local key = itemId or ("name:" .. name)
-    local entry = OrctionDB.priceHistory[key]
+    local entry = store[key]
     if not entry then
         entry = { itemId = itemId or 0, name = name or "" }
-        OrctionDB.priceHistory[key] = entry
+        store[key] = entry
     end
     return entry
 end
 
 function OrctionData_ShouldRecord(itemId, name)
     OrctionData_EnsureDB()
+    local store = OrctionData_GetStore()
     local key = itemId or ("name:" .. name)
-    local entry = OrctionDB.priceHistory[key]
+    local entry = store[key]
     if not entry then return true end
     local cacheHours = ORCTION_DATA_CACHE_HOURS or 1
     local cacheSeconds = cacheHours * 3600
@@ -39,15 +66,16 @@ end
 -- Returns the raw price history entry for an item, or nil if not found.
 -- Tries numeric itemId key first, then "name:<name>" key, then a full scan by name.
 function OrctionData_GetItemHistory(itemId, name)
-    if not (OrctionDB and OrctionDB.priceHistory) then return nil end
+    if not (OrctionDB and OrctionDB.priceHistoryByRealm) then return nil end
+    local store = OrctionData_GetStore()
     if itemId and itemId > 0 then
-        local e = OrctionDB.priceHistory[itemId]
+        local e = store[itemId]
         if e then return e end
     end
     if name then
-        local e = OrctionDB.priceHistory["name:" .. name]
+        local e = store["name:" .. name]
         if e then return e end
-        for _, entry in pairs(OrctionDB.priceHistory) do
+        for _, entry in pairs(store) do
             if entry.name == name then return entry end
         end
     end
@@ -59,7 +87,7 @@ end
 function OrctionData_RecordScanPrice(itemId, name, price, count)
     if not price or price <= 0 then return end
     OrctionData_EnsureDB()
-
+    local store = OrctionData_GetStore()
     local slot = OrctionData_GetDaySlot()
     local entry = OrctionData_GetPriceEntry(itemId, name)
 
@@ -85,14 +113,14 @@ end
 function OrctionData_MergeEntry(inEntry)
     if not inEntry then return end
     OrctionData_EnsureDB()
-
+    local store = OrctionData_GetStore()
     local name = inEntry.name or ""
     local itemId = tonumber(inEntry.itemId or 0) or 0
     local key = (itemId > 0) and itemId or ("name:" .. name)
-    local entry = OrctionDB.priceHistory[key]
+    local entry = store[key]
     if not entry then
         entry = { itemId = itemId, name = name }
-        OrctionDB.priceHistory[key] = entry
+        store[key] = entry
     end
 
     if entry.name == "" and name ~= "" then entry.name = name end

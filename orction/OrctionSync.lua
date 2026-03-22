@@ -45,8 +45,14 @@ function OrctionSync_QueueItem(itemId, name)
 end
 
 local function OrctionSync_BuildMessage(entry)
+    local realm, faction = "Unknown", "Neutral"
+    if OrctionData_GetScope then
+        realm, faction = OrctionData_GetScope()
+    end
     local parts = {}
     table.insert(parts, "D")
+    table.insert(parts, realm or "Unknown")
+    table.insert(parts, faction or "Neutral")
     table.insert(parts, tostring(entry.itemId or 0))
     table.insert(parts, entry.name or "")
     table.insert(parts, tostring(entry.lastRecorded or 0))
@@ -94,13 +100,21 @@ local function OrctionSync_HandleMessage(msg, sender)
     end
     if fields[1] ~= "D" then return end
 
-    local itemId = tonumber(fields[2] or 0) or 0
-    local name = fields[3] or ""
+    local realm = fields[2] or "Unknown"
+    local faction = fields[3] or "Neutral"
+    local myRealm, myFaction = "Unknown", "Neutral"
+    if OrctionData_GetScope then
+        myRealm, myFaction = OrctionData_GetScope()
+    end
+    if realm ~= myRealm or faction ~= myFaction then return end
+
+    local itemId = tonumber(fields[4] or 0) or 0
+    local name = fields[5] or ""
     if name == "" and itemId <= 0 then return end
-    local lastRecorded = tonumber(fields[4] or 0) or 0
+    local lastRecorded = tonumber(fields[6] or 0) or 0
 
     local entry = { itemId = itemId, name = name, lastRecorded = lastRecorded }
-    local idx = 5
+    local idx = 7
     for d = 1, 7 do
         entry["day" .. d .. "Price"] = tonumber(fields[idx] or 0) or 0
         entry["day" .. d .. "Count"] = tonumber(fields[idx + 1] or 0) or 0

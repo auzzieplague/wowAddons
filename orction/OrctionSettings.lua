@@ -440,10 +440,18 @@ local function OrctionSettings_GetDaySlot()
     return math.mod(day, 7) + 1
 end
 
+local function OrctionSettings_GetDataStore()
+    if OrctionData_GetStore then
+        return OrctionData_GetStore()
+    end
+    return OrctionDB and OrctionDB.priceHistory
+end
+
 local function OrctionSettings_GetDataKeys()
     local keys = {}
-    if OrctionDB and OrctionDB.priceHistory then
-        for k, v in pairs(OrctionDB.priceHistory) do
+    local store = OrctionSettings_GetDataStore()
+    if store then
+        for k, v in pairs(store) do
             local name = v and v.name or ""
             if dataSearchText == "" or string.find(string.lower(name), string.lower(dataSearchText), 1, true) then
                 table.insert(keys, k)
@@ -455,6 +463,7 @@ local function OrctionSettings_GetDataKeys()
 end
 
 local function OrctionSettings_RefreshData()
+    local store = OrctionSettings_GetDataStore()
     local keys = OrctionSettings_GetDataKeys()
     local total = table.getn(keys)
     local maxPage = math.max(1, math.ceil(total / dataPageSize))
@@ -468,8 +477,9 @@ local function OrctionSettings_RefreshData()
         local idx = startIdx + i - 1
         if row and idx <= total then
             local key = keys[idx]
-            local entry = OrctionDB.priceHistory[key]
-            row.name:SetText(entry.name or "")
+            local entry = store and store[key]
+            if entry then
+                row.name:SetText(entry.name or "")
             local weeklySum = 0
             for d = 1, 7 do
                 local pKey = "day" .. d .. "Price"
@@ -491,6 +501,9 @@ local function OrctionSettings_RefreshData()
                 row.value:SetText(tostring(math.floor(weeklySum / 7)))
             end
             row.frame:Show()
+            else
+                row.frame:Hide()
+            end
         elseif row then
             row.frame:Hide()
         end
@@ -556,7 +569,12 @@ purgeBtn:SetWidth(90)
 purgeBtn:SetHeight(22)
 purgeBtn:SetText("Purge Data")
 purgeBtn:SetScript("OnClick", function()
-    if OrctionDB then OrctionDB.priceHistory = {} end
+    local store = OrctionSettings_GetDataStore()
+    if store then
+        for k in pairs(store) do store[k] = nil end
+    elseif OrctionDB then
+        OrctionDB.priceHistory = {}
+    end
     OrctionSettings_RefreshData()
 end)
 

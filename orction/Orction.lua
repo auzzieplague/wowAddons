@@ -2470,7 +2470,7 @@ local function Orction_BuildAHPanel()
     OrctionSearchingText:Hide()
 
     OrctionSimilarResultsText = OrctionAHPanel:CreateFontString("OrctionSimilarResultsText", "OVERLAY", "GameFontHighlight")
-    OrctionSimilarResultsText:SetPoint("BOTTOM", scrollFrame, "TOP", 180, 28)
+    OrctionSimilarResultsText:SetPoint("BOTTOM", scrollFrame, "TOP", 170, 38)
     OrctionSimilarResultsText:SetText("|cFFFF9900 couldn't exact match everything |r")
     OrctionSimilarResultsText:Hide()
 
