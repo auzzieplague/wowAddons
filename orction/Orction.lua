@@ -61,6 +61,7 @@ local orctionBuyBidPlaced      = false -- PlaceAuctionBid was called; waiting fo
 local orctionBuyBidTimeout     = 0     -- seconds since bid was placed with no AUCTION_ITEM_LIST_UPDATE
 local orctionBuyBidRechecked   = false -- true after one fallback re-query was fired
 local orctionPriceWriteQueue   = {}    -- {itemId, name, price} items waiting for async DB write
+local orctionSellerFilter      = nil   -- player name to filter results by (nil = no filter)
 local orctionSearchRecorded    = {}    -- key→true: items already queued for recording this search
 
 -- ── Helpers ───────────────────────────────────────────────────────────────
@@ -771,6 +772,17 @@ local function Orction_DisplayResults()
         if results[i].name ~= firstName then multiItem = true ; break end
     end
 
+    -- Seller filter: narrow to specific player before grouping
+    if orctionSellerFilter and string.len(orctionSellerFilter) > 0 then
+        local selFiltered = {}
+        for _, item in ipairs(results) do
+            if (item.owner or "") == orctionSellerFilter then
+                table.insert(selFiltered, item)
+            end
+        end
+        results = selFiltered
+    end
+
     local groups   = {}
     local groupMap = {}
     for _, item in ipairs(results) do
@@ -810,7 +822,8 @@ local function Orction_DisplayResults()
     table.sort(groups, function(a, b) return a.costPerItem < b.costPerItem end)
 
     -- Full category scan: only retain items whose price is below their vendor sell value
-    if orctionFullScanActive or orctionFullScanResultsShowing then
+    -- (skipped for seller scans — we want all items from that player)
+    if (orctionFullScanActive or orctionFullScanResultsShowing) and not orctionSellerFilter then
         local filtered = {}
         for _, g in ipairs(groups) do
             if g.vendorPrice and g.vendorPrice > 0 and g.costPerItem < g.vendorPrice then
@@ -1076,7 +1089,7 @@ local function Orction_CollectPage()
         orctionQueryDelay  = 0
         if orctionFullScanActive then
             orctionFullScanPagesProcessed = orctionFullScanPagesProcessed + 1
-            if math.mod(orctionFullScanPagesProcessed, FULL_SCAN_UPDATE_INTERVAL) == 0 then
+            if orctionSellerFilter or math.mod(orctionFullScanPagesProcessed, FULL_SCAN_UPDATE_INTERVAL) == 0 then
                 Orction_DisplayResults()
                 if OrctionSearchingText then
                     OrctionSearchingText:Show()
@@ -1723,6 +1736,7 @@ local function Orction_DoTextSearch()
         text = ""  -- empty search: browse by category / usable filter only
     end
     Orction_ResetPostUI()
+    orctionSellerFilter = nil
     orctionVendorPrice = Orction_GetVendorPrice(text)
     Orction_StartSearch(text, orctionSearchClassIndex, orctionSearchSubIndex)
 end
@@ -2059,6 +2073,26 @@ local function Orction_AHPanel_OnEvent()
     end
 end
 
+-- ── Global entry points for bottom-bar scan buttons (avoids upvalue pressure on BuildAHPanel) ──
+
+function Orction_StartCategoryScan()
+    orctionSellerFilter = nil
+    Orction_StartFullScan()
+end
+
+function Orction_StartSellerScan()
+    local box = getglobal("OrctionFindSellerBox")
+    if not box then return end
+    local name = box:GetText() or ""
+    name = string.gsub(name, "^%s+", "")
+    name = string.gsub(name, "%s+$", "")
+    if string.len(name) == 0 then return end
+    name = string.upper(string.sub(name, 1, 1)) .. string.sub(name, 2)
+    box:SetText(name)
+    orctionSellerFilter = name
+    Orction_StartFullScan()
+end
+
 -- ── Build the AH panel ────────────────────────────────────────────────────
 
 local function Orction_BuildAHPanel()
@@ -2369,7 +2403,7 @@ local function Orction_BuildAHPanel()
     fullScanBtn:SetHeight(23)
     fullScanBtn:SetPoint("LEFT", watchlistToggleBtn, "RIGHT", 4, 0)
     fullScanBtn:SetText("Category Scan")
-    fullScanBtn:SetScript("OnClick", Orction_StartFullScan)
+    fullScanBtn:SetScript("OnClick", Orction_StartCategoryScan)
 
     local cancelScanBtn = CreateFrame("Button", nil, OrctionAHPanel, "UIPanelButtonTemplate")
     cancelScanBtn:SetWidth(78)
@@ -2385,7 +2419,7 @@ local function Orction_BuildAHPanel()
     -- ── Watchlist overlay panel ───────────────────────────────────────────────
     local wlFrame = CreateFrame("Frame", "OrctionWatchlistFrame", OrctionAHPanel)
     wlFrame:SetWidth(195)
-    wlFrame:SetHeight(280)
+    wlFrame:SetHeight(310)
     wlFrame:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 15, -75)
     wlFrame:SetFrameLevel(OrctionAHPanel:GetFrameLevel() + 15)
     wlFrame:SetBackdrop({
@@ -2544,6 +2578,29 @@ local function Orction_BuildAHPanel()
             wlAddBox:SetText("")
         end
     end)
+
+    local fpLabel = wlFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    fpLabel:SetPoint("BOTTOMLEFT", wlFrame, "BOTTOMLEFT", 8, 55)
+    fpLabel:SetText("find people:")
+
+    local fpBox = CreateFrame("EditBox", "OrctionFindSellerBox", wlFrame, "InputBoxTemplate")
+    fpBox:SetWidth(113)
+    fpBox:SetHeight(20)
+    fpBox:SetPoint("BOTTOMLEFT", wlFrame, "BOTTOMLEFT", 8, 32)
+    fpBox:SetAutoFocus(false)
+    fpBox:SetMaxLetters(32)
+    fpBox:SetScript("OnEnterPressed", function()
+        this:ClearFocus()
+        Orction_StartSellerScan()
+    end)
+    fpBox:SetScript("OnEscapePressed", function() this:ClearFocus() end)
+
+    local fpBtn = CreateFrame("Button", nil, wlFrame, "UIPanelButtonTemplate")
+    fpBtn:SetWidth(34)
+    fpBtn:SetHeight(20)
+    fpBtn:SetPoint("LEFT", fpBox, "RIGHT", 6, 0)
+    fpBtn:SetText("Find")
+    fpBtn:SetScript("OnClick", Orction_StartSellerScan)
 
     local wlFullBtn = CreateFrame("Button", nil, wlFrame, "UIPanelButtonTemplate")
     wlFullBtn:SetWidth(40)
