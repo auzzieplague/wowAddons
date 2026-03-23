@@ -2073,6 +2073,34 @@ local function Orction_AHPanel_OnEvent()
     end
 end
 
+-- ── Export current results to CSV ─────────────────────────────────────────
+
+function Orction_ExportResults()
+    local results = orctionSimilarResults
+    if not results or table.getn(results) == 0 then
+        DEFAULT_CHAT_FRAME:AddMessage("Orction: no results to export")
+        return
+    end
+    local lines = {"item,cost,seller"}
+    for _, item in ipairs(results) do
+        local name   = item.name    or ""
+        local cost   = item.costPerItem or 0
+        local seller = item.owner   or ""
+        if string.find(name,   ",") then name   = '"' .. name   .. '"' end
+        if string.find(seller, ",") then seller = '"' .. seller .. '"' end
+        table.insert(lines, name .. "," .. cost .. "," .. seller)
+    end
+    local csv = table.concat(lines, "\n")
+    local frame = getglobal("OrctionExportFrame")
+    local box   = getglobal("OrctionExportBox")
+    if frame and box then
+        box:SetText(csv)
+        frame:Show()
+        box:SetFocus()
+        box:HighlightText()
+    end
+end
+
 -- ── Global entry points for bottom-bar scan buttons (avoids upvalue pressure on BuildAHPanel) ──
 
 function Orction_StartCategoryScan()
@@ -2686,6 +2714,53 @@ local function Orction_BuildAHPanel()
     nextPageBtn:SetText("More Results")
     nextPageBtn:Disable()
     nextPageBtn:SetScript("OnClick", Orction_FetchNextPages)
+
+    local exportBtn = CreateFrame("Button", nil, OrctionAHPanel, "UIPanelButtonTemplate")
+    exportBtn:SetWidth(70)
+    exportBtn:SetHeight(22)
+    exportBtn:SetPoint("RIGHT", nextPageBtn, "LEFT", -4, 0)
+    exportBtn:SetText("Export")
+    exportBtn:SetScript("OnClick", Orction_ExportResults)
+
+    -- ── Export popup ──────────────────────────────────────────────────────────
+    local exportFrame = CreateFrame("Frame", "OrctionExportFrame", UIParent)
+    exportFrame:SetWidth(460)
+    exportFrame:SetHeight(300)
+    exportFrame:SetPoint("CENTER", UIParent, "CENTER")
+    exportFrame:SetFrameStrata("DIALOG")
+    exportFrame:SetMovable(true)
+    exportFrame:EnableMouse(true)
+    exportFrame:RegisterForDrag("LeftButton")
+    exportFrame:SetScript("OnDragStart", function() this:StartMoving() end)
+    exportFrame:SetScript("OnDragStop",  function() this:StopMovingOrSizing() end)
+    exportFrame:SetBackdrop({
+        bgFile   = "Interface\\Buttons\\WHITE8X8",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile=true, tileSize=8, edgeSize=12,
+        insets={left=3,right=3,top=3,bottom=3},
+    })
+    exportFrame:SetBackdropColor(0.06, 0.06, 0.1, 0.97)
+    exportFrame:Hide()
+
+    local expTitle = exportFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    expTitle:SetPoint("TOP", exportFrame, "TOP", 0, -10)
+    expTitle:SetText("Export CSV  —  Ctrl+A, Ctrl+C to copy")
+
+    local expClose = CreateFrame("Button", nil, exportFrame, "UIPanelCloseButton")
+    expClose:SetPoint("TOPRIGHT", exportFrame, "TOPRIGHT", 2, 2)
+    expClose:SetScript("OnClick", function() exportFrame:Hide() end)
+
+    local expScrollFrame = CreateFrame("ScrollFrame", nil, exportFrame, "UIPanelScrollFrameTemplate")
+    expScrollFrame:SetPoint("TOPLEFT",     exportFrame, "TOPLEFT",     8,  -28)
+    expScrollFrame:SetPoint("BOTTOMRIGHT", exportFrame, "BOTTOMRIGHT", -26,  8)
+
+    local expBox = CreateFrame("EditBox", "OrctionExportBox", expScrollFrame)
+    expBox:SetMultiLine(true)
+    expBox:SetFontObject(GameFontHighlightSmall)
+    expBox:SetWidth(expScrollFrame:GetWidth())
+    expBox:SetAutoFocus(false)
+    expBox:SetScript("OnEscapePressed", function() exportFrame:Hide() end)
+    expScrollFrame:SetScrollChild(expBox)
 
     -- ── Listen for item slot and search result changes ─────────────────────
 
