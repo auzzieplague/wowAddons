@@ -125,6 +125,23 @@ local function OrctionTooltip_Apply(tooltip, itemName, context, stackCount, item
     end
 
     if IsShiftKeyDown and IsShiftKeyDown() then
+        if entry then
+            local bestPrice = 0
+            local bestDay = nil
+            for d = 1, 7 do
+                local pVal = entry["day" .. d .. "Price"] or 0
+                local cVal = entry["day" .. d .. "Count"] or 0
+                if cVal > 0 and pVal > bestPrice then
+                    bestPrice = pVal
+                    bestDay = d
+                end
+            end
+            if bestDay and bestPrice > 0 then
+                local dayNames = { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" }
+                local label = dayNames[bestDay] or ("Day " .. bestDay)
+                tip:AddLine("Best day: " .. label .. " — " .. Orction_FormatMoney(bestPrice), 0.6, 0.9, 0.6)
+            end
+        end
         OrctionTooltip_ShowGraph(tip, entry)
     else
         OrctionTooltip_HideGraph()

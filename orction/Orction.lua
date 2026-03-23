@@ -34,7 +34,7 @@ local orctionLastTooltipLink = nil
 local orctionLastTooltipName = nil
 local orctionWatchlistRows   = {}
 local WL_ROW_H               = 16
-local WL_MAX_ROWS            = 13
+local WL_MAX_ROWS            = 10
 local orctionSimilarResults   = {}   -- all AH results regardless of name match
 local orctionShowingSimilar   = false -- true when showing similar after exact match found nothing
 local orctionVendorCache      = {}   -- name -> vendor copper, reset each search
@@ -986,8 +986,8 @@ local function Orction_CollectPage()
                     Orction_UpdateSearchingText()
                 end
             end
-        elseif not orctionScanMode then
-            -- Regular search: refresh results after every page so user sees progress
+        else
+            -- Regular search or watchlist scan: refresh results after every page so user sees progress
             Orction_DisplayResults()
             if OrctionSearchingText then
                 OrctionSearchingText:Show()
@@ -1636,8 +1636,8 @@ local function Orction_RefreshWatchlist()
     if not OrctionWatchlistScroll then return end
     local list   = Orction_GetWatchlist()
     local count  = table.getn(list)
-    local offset = FauxScrollFrame_GetOffset(OrctionWatchlistScroll)
     FauxScrollFrame_Update(OrctionWatchlistScroll, count, WL_MAX_ROWS, WL_ROW_H)
+    local offset = FauxScrollFrame_GetOffset(OrctionWatchlistScroll)
     for i = 1, WL_MAX_ROWS do
         local idx = i + offset
         local row = orctionWatchlistRows[i]
@@ -1977,20 +1977,15 @@ local function Orction_BuildAHPanel()
     searchBtn:GetHighlightTexture():SetBlendMode("ADD")
     searchBtn:SetScript("OnClick", Orction_DoTextSearch)
 
-    local addWatchBtn = CreateFrame("Button", nil, OrctionAHPanel, "UIPanelButtonTemplate")
-    addWatchBtn:SetWidth(36)
-    addWatchBtn:SetHeight(22)
-    addWatchBtn:SetPoint("LEFT", searchBtn, "RIGHT", 4, 0)
-    addWatchBtn:SetText("WL+")
-    addWatchBtn:SetScript("OnClick", function()
-        local text = OrctionSearchBox:GetText()
-        if text and string.len(text) > 0 then
-            Orction_AddToWatchlist(text, orctionSearchClassIndex, orctionSearchSubIndex)
-        end
-    end)
+    local searchTextBtn = CreateFrame("Button", nil, OrctionAHPanel, "UIPanelButtonTemplate")
+    searchTextBtn:SetWidth(50)
+    searchTextBtn:SetHeight(22)
+    searchTextBtn:SetPoint("LEFT", searchBtn, "RIGHT", 4, 0)
+    searchTextBtn:SetText("Search")
+    searchTextBtn:SetScript("OnClick", Orction_DoTextSearch)
 
     OrctionExactMatchCheck = CreateFrame("CheckButton", "OrctionExactMatchCheck", OrctionAHPanel, "OptionsCheckButtonTemplate")
-    OrctionExactMatchCheck:SetPoint("LEFT", addWatchBtn, "RIGHT", 8, 0)
+    OrctionExactMatchCheck:SetPoint("LEFT", searchTextBtn, "RIGHT", 8, 0)
     getglobal("OrctionExactMatchCheckText"):SetText("Exact")
     OrctionExactMatchCheck:SetHitRectInsets(0, 5, 0, 0)
     OrctionExactMatchCheck:SetWidth(30)
@@ -2325,7 +2320,9 @@ local function Orction_BuildAHPanel()
     OrctionWatchlistScroll:SetHeight(WL_MAX_ROWS * WL_ROW_H)
     OrctionWatchlistScroll:SetPoint("TOPLEFT", wlFrame, "TOPLEFT", 4, -22)
     OrctionWatchlistScroll:SetScript("OnVerticalScroll", function()
-        FauxScrollFrame_OnVerticalScroll(arg1, WL_ROW_H, Orction_RefreshWatchlist)
+        OrctionWatchlistScroll:SetVerticalScroll(arg1)
+        OrctionWatchlistScroll.offset = math.floor(arg1 / WL_ROW_H + 0.5)
+        Orction_RefreshWatchlist()
     end)
 
     local wlRowsFrame = CreateFrame("Frame", nil, wlFrame)
@@ -2392,23 +2389,39 @@ local function Orction_BuildAHPanel()
         orctionWatchlistRows[i] = row
     end
 
-    -- Scan placeholder buttons
-    local wlVendorBtn = CreateFrame("Button", nil, wlFrame, "UIPanelButtonTemplate")
-    wlVendorBtn:SetWidth(56)
-    wlVendorBtn:SetHeight(20)
-    wlVendorBtn:SetPoint("BOTTOMLEFT", wlFrame, "BOTTOMLEFT", 6, 6)
-    wlVendorBtn:SetText("Vendor")
+    local wlAddBox = CreateFrame("EditBox", "OrctionWatchlistAddBox", wlFrame, "InputBoxTemplate")
+    wlAddBox:SetWidth(113)
+    wlAddBox:SetHeight(20)
+    wlAddBox:SetPoint("BOTTOMLEFT", wlFrame, "BOTTOMLEFT", 8, 75)
+    wlAddBox:SetAutoFocus(false)
+    wlAddBox:SetMaxLetters(64)
+    wlAddBox:SetScript("OnEnterPressed", function()
+        local text = wlAddBox:GetText()
+        if text and string.len(text) > 0 then
+            Orction_AddToWatchlist(text, 0, 0)
+            wlAddBox:SetText("")
+        end
+        wlAddBox:ClearFocus()
+    end)
+    wlAddBox:SetScript("OnEscapePressed", function() wlAddBox:ClearFocus() end)
 
-    local wScanBtn = CreateFrame("Button", nil, wlFrame, "UIPanelButtonTemplate")
-    wScanBtn:SetWidth(44)
-    wScanBtn:SetHeight(20)
-    wScanBtn:SetPoint("LEFT", wlVendorBtn, "RIGHT", 4, 0)
-    wScanBtn:SetText("First")
+    local wlAddBtn = CreateFrame("Button", nil, wlFrame, "UIPanelButtonTemplate")
+    wlAddBtn:SetWidth(34)
+    wlAddBtn:SetHeight(20)
+    wlAddBtn:SetPoint("LEFT", wlAddBox, "RIGHT", 6, 0)
+    wlAddBtn:SetText("Add")
+    wlAddBtn:SetScript("OnClick", function()
+        local text = wlAddBox:GetText()
+        if text and string.len(text) > 0 then
+            Orction_AddToWatchlist(text, 0, 0)
+            wlAddBox:SetText("")
+        end
+    end)
 
     local wlFullBtn = CreateFrame("Button", nil, wlFrame, "UIPanelButtonTemplate")
     wlFullBtn:SetWidth(40)
     wlFullBtn:SetHeight(20)
-    wlFullBtn:SetPoint("LEFT", wScanBtn, "RIGHT", 4, 0)
+    wlFullBtn:SetPoint("BOTTOMRIGHT", wlFrame, "BOTTOMRIGHT", -6, 6)
     wlFullBtn:SetText("Scan")
     wlFullBtn:SetScript("OnClick", Orction_StartScan)
 
