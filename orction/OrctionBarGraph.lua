@@ -104,6 +104,8 @@ function OrctionBarGraph_Create(parent, width, height)
 
         local showLabels = options and options.showLabels
         local todayIndex = options and options.todayIndex
+        local factor = (options and options.confidenceFactor) or ORCTION_CONFIDENCE_FACTOR or 1
+        if factor <= 0 then factor = 1 end
         local labelPad = showLabels and LABEL_PAD or 0
         local drawH = (graph._height or height) - TOP_PAD - labelPad
         if drawH < 4 then drawH = 4 end
@@ -114,7 +116,7 @@ function OrctionBarGraph_Create(parent, width, height)
             local val        = values[i] or 0
             local pct        = maxVal > 0 and (val / maxVal) or 0
             local n_obs      = (counts and counts[i]) or CONFIDENCE_THRESHOLD
-            local confidence = math.min(1, n_obs / CONFIDENCE_THRESHOLD)
+            local confidence = math.min(1, n_obs / (CONFIDENCE_THRESHOLD * factor))
             local colorPct   = pct * confidence
             local bh         = math.max(2, math.floor(colorPct * drawH))
 

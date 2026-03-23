@@ -564,6 +564,34 @@ dataOffsetSlider:SetScript("OnValueChanged", function()
     end
 end)
 
+local confLabel = dataPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+confLabel:SetPoint("TOPLEFT", dataOffsetLabel, "BOTTOMLEFT", 0, -10)
+confLabel:SetText("Confidence Factor")
+
+local confSlider = CreateFrame("Slider", "OrctionConfidenceSlider", dataPanel, "OptionsSliderTemplate")
+confSlider:SetWidth(120)
+confSlider:SetPoint("LEFT", confLabel, "RIGHT", 8, 0)
+confSlider:SetMinMaxValues(0.5, 3.0)
+confSlider:SetValueStep(0.1)
+confSlider:SetValue(1.0)
+
+getglobal("OrctionConfidenceSliderLow"):SetText("0.5")
+getglobal("OrctionConfidenceSliderHigh"):SetText("3.0")
+
+local confValueText = dataPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+confValueText:SetPoint("LEFT", confSlider, "RIGHT", 6, 0)
+confValueText:SetText("1.0")
+
+confSlider:SetScript("OnValueChanged", function()
+    local val = this:GetValue()
+    val = math.floor(val * 10 + 0.5) / 10
+    confValueText:SetText(string.format("%.1f", val))
+    ORCTION_CONFIDENCE_FACTOR = val
+    if OrctionDB and OrctionDB.settings then
+        OrctionDB.settings.confidenceFactor = val
+    end
+end)
+
 local purgeBtn = CreateFrame("Button", nil, dataPanel, "UIPanelButtonTemplate")
 purgeBtn:SetWidth(90)
 purgeBtn:SetHeight(22)
@@ -924,6 +952,10 @@ local function OrctionSettings_ApplyToUI()
     dataOffsetSlider:SetValue(off)
     dataOffsetValueText:SetText(tostring(off))
 
+    local cf = s.confidenceFactor or 1.0
+    confSlider:SetValue(cf)
+    confValueText:SetText(string.format("%.1f", cf))
+
     local syncEnabled = s.syncEnabled
     if syncEnabled then OrctionSyncEnabledCheck:SetChecked(1) else OrctionSyncEnabledCheck:SetChecked(nil) end
     local syncChannel = s.syncChannel or "GUILD"
@@ -985,6 +1017,7 @@ settingsEventFrame:SetScript("OnEvent", function()
         if s.auctionDuration  == nil then s.auctionDuration  = 2     end
         if s.syncEnabled      == nil then s.syncEnabled      = true  end
         if s.syncChannel      == nil then s.syncChannel      = "GUILD" end
+        if s.confidenceFactor == nil then s.confidenceFactor = 1.0   end
 
         -- Sync exact match checkbox
         if OrctionExactMatchCheck then
@@ -1004,6 +1037,7 @@ settingsEventFrame:SetScript("OnEvent", function()
         ORCTION_AUCTION_DURATION  = s.auctionDuration
         ORCTION_SYNC_ENABLED      = s.syncEnabled and 1 or 0
         ORCTION_SYNC_CHANNEL      = s.syncChannel
+        ORCTION_CONFIDENCE_FACTOR = s.confidenceFactor
 
         -- Ensure persistent tables exist
         if not OrctionDB.vendorPrices then OrctionDB.vendorPrices = {} end

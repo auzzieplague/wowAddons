@@ -427,14 +427,15 @@ local Orction_ShowVendorInfo  -- forward declaration; defined below
 
 -- ── Result row factory (called lazily from Orction_DisplayResults) ────────
 -- Column constants mirror those in Orction_BuildAHPanel.
-local RC_COL_ICON = 6
-local RC_COL_NAME = 34
-local RC_COL_WL   = 138  -- WL+ button column
-local RC_COL1     = 174  -- cost / item
-local RC_COL2     = 278  -- available
-local RC_COL3     = 356  -- auctions
-local RC_COL4     = 420  -- buy button
-local RC_COL_INFO = 506  -- info button
+local RC_COL_ICON   = 6
+local RC_COL_NAME   = 34
+local RC_COL_WL     = 138  -- WL+ button column
+local RC_COL1       = 174  -- cost / item
+local RC_COL_SELLER = 264  -- seller name
+local RC_COL2       = 348  -- available
+local RC_COL3       = 404  -- auctions
+local RC_COL4       = 448  -- buy button
+local RC_COL_INFO   = 535  -- info button
 local RC_ROW_H    = 37
 local RC_ROW_W    = 578
 
@@ -473,6 +474,11 @@ local function Orction_CreateResultRow(i)
 
     local costFS = rowBtn:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
     costFS:SetPoint("TOPLEFT", rowBtn, "TOPLEFT", RC_COL1, -13)
+
+    local sellerFS = rowBtn:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    sellerFS:SetPoint("TOPLEFT", rowBtn, "TOPLEFT", RC_COL_SELLER, -13)
+    sellerFS:SetWidth(80)
+    sellerFS:SetJustifyH("LEFT")
 
     local qtyFS = rowBtn:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
     qtyFS:SetPoint("TOPLEFT", rowBtn, "TOPLEFT", RC_COL2, -13)
@@ -587,9 +593,11 @@ local function Orction_CreateResultRow(i)
     orctionResultRows[i] = { frame = rowBtn, cost = costFS, qty = qtyFS,
                               auctions = aucFS, buyBtn = buyBtn, wlBtn = wlBtn, bg = bg,
                               nameFS = nameFS, iconTex = iconTex, profitFS = profitFS, infoBtn = infoBtn,
+                              sellerFS = sellerFS,
                               isEven = (math.mod(i, 2) == 0),
                               costPerItem = nil, firstBuyout = nil, itemName = nil, itemId = nil,
-                              texture = nil, vendorPrice = nil, vendorBuy = nil, vendorMerchants = nil, vendorSold = nil }
+                              texture = nil, vendorPrice = nil, vendorBuy = nil, vendorMerchants = nil,
+                              vendorSold = nil, seller = nil, quality = nil }
 
     rowBtn:SetScript("OnEnter", function()
         local row = orctionResultRows[idx]
@@ -705,7 +713,9 @@ local function Orction_DisplayResults()
                             vendorSold  = (item.vendorBuy and item.vendorBuy > 0) or (item.vendorMerchants and item.vendorMerchants ~= ""),
                             totalCount  = 0, numAuctions = 0,
                             firstBuyout = item.buyout,
-                            firstCount  = item.count }
+                            firstCount  = item.count,
+                            quality     = item.quality,
+                            seller      = item.owner or "" }
             table.insert(groups, groupMap[k])
         end
         groupMap[k].totalCount  = groupMap[k].totalCount  + item.count
@@ -720,6 +730,8 @@ local function Orction_DisplayResults()
             groupMap[k].vendorBuy   = item.vendorBuy or 0
             groupMap[k].vendorMerchants = item.vendorMerchants
             groupMap[k].vendorSold  = (item.vendorBuy and item.vendorBuy > 0) or (item.vendorMerchants and item.vendorMerchants ~= "")
+            groupMap[k].quality     = item.quality
+            groupMap[k].seller      = item.owner or ""
         end
     end
     table.sort(groups, function(a, b) return a.costPerItem < b.costPerItem end)
@@ -820,7 +832,13 @@ local function Orction_DisplayResults()
             row.cost:SetText(FormatMoneyColour(g.costPerItem))
             row.qty:SetText(tostring(g.totalCount))
             row.auctions:SetText(tostring(g.numAuctions))
-            if row.nameFS  then row.nameFS:SetText(g.name or "") end
+            if row.nameFS then
+                row.nameFS:SetText(g.name or "")
+                local qc = g.quality and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[g.quality]
+                if qc then row.nameFS:SetTextColor(qc.r, qc.g, qc.b)
+                else        row.nameFS:SetTextColor(1, 1, 1) end
+            end
+            if row.sellerFS then row.sellerFS:SetText(g.seller or "") end
             if row.iconTex then
                 if g.texture then row.iconTex:SetTexture(g.texture) ; row.iconTex:Show()
                 else               row.iconTex:Hide() end
@@ -864,9 +882,12 @@ local function Orction_DisplayResults()
             row.vendorBuy   = nil
             row.vendorMerchants = nil
             row.vendorSold  = nil
+            row.seller      = nil
+            row.quality     = nil
+            if row.sellerFS then row.sellerFS:SetText("") end
             if row.wlBtn    then row.wlBtn:Hide()    end
             if row.profitFS then row.profitFS:Hide() end
-            if row.infoBtn then row.infoBtn:Hide() end
+            if row.infoBtn  then row.infoBtn:Hide()  end
             row.frame:Hide()
         end
     end
@@ -895,7 +916,7 @@ local function Orction_CollectPage()
     local pageAdded = 0
     for i = 1, batch do
         local name, texture, count, quality, canUse, level,
-              minBid, minIncrement, buyoutPrice = GetAuctionItemInfo("list", i)
+              minBid, minIncrement, buyoutPrice, bidAmount, highBidder, owner = GetAuctionItemInfo("list", i)
 
         -- Per-item vendor price: session cache → AH link → bag scan fallback
         local vPrice = orctionVendorCache[name]
@@ -948,6 +969,8 @@ local function Orction_CollectPage()
                 vendorPrice = vPrice,
                 vendorBuy   = vendorBuy,
                 vendorMerchants = vendorMerchants,
+                quality     = quality,
+                owner       = owner or "",
             }
             -- Always collect into similar (all results)
             table.insert(orctionSimilarResults, entry)
@@ -2429,13 +2452,14 @@ local function Orction_BuildAHPanel()
     -- Right panel footprint from dump: x=219, y=76, w=576, h=37 per row
     -- Column offsets are relative to the scroll child (x=0 = panel x=219)
 
-    local COL_ICON_X = 6    -- item icon
-    local COL_NAME_X = 34   -- item name
-    local COL_WL_X   = 138  -- WL+ button
-    local COL1_X     = 174  -- cost per item
-    local COL2_X     = 278  -- total available
-    local COL3_X     = 356  -- # auctions
-    local COL4_X     = 420  -- buy button x
+    local COL_ICON_X   = 6    -- item icon
+    local COL_NAME_X   = 34   -- item name
+    local COL_WL_X     = 138  -- WL+ button
+    local COL1_X       = 174  -- cost per item
+    local COL_SELLER_X = 264  -- seller name
+    local COL2_X       = 348  -- total available
+    local COL3_X       = 404  -- # auctions
+    local COL4_X       = 448  -- buy button x
     local HEADER_Y   = -81
     local ROW_H      = 37
     local ROW_W      = 578
@@ -2447,6 +2471,10 @@ local function Orction_BuildAHPanel()
     local hCost = OrctionAHPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     hCost:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 219 + COL1_X, HEADER_Y)
     hCost:SetText("Cost / Item")
+
+    local hSeller = OrctionAHPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    hSeller:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 219 + COL_SELLER_X, HEADER_Y)
+    hSeller:SetText("Seller")
 
     local hQty = OrctionAHPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     hQty:SetPoint("TOPLEFT", OrctionAHPanel, "TOPLEFT", 219 + COL2_X, HEADER_Y)
