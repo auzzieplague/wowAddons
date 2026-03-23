@@ -33,6 +33,7 @@ local ORCTION_TOOLTIP_HOOKED = false
 local orctionLastTooltipLink = nil
 local orctionLastTooltipName = nil
 local orctionWatchlistRows   = {}
+local orctionSearchInvType   = nil    -- selected inventory type string (nil = all)
 local WL_ROW_H               = 16
 local WL_MAX_ROWS            = 10
 local orctionSimilarResults   = {}   -- all AH results regardless of name match
@@ -183,6 +184,11 @@ local function Orction_GetSubClassName(classIndex, subIndex)
     return subs[subIndex] or "None"
 end
 
+local function Orction_GetInvTypeName(invType)
+    if not invType then return "All" end
+    return getglobal(invType) or invType
+end
+
 local function Orction_GetCategoryLabel()
     local catName = Orction_GetClassName(orctionSearchClassIndex)
     local catLabel = (catName ~= "None") and catName or "All"
@@ -190,12 +196,20 @@ local function Orction_GetCategoryLabel()
         local sub = Orction_GetSubClassName(orctionSearchClassIndex, orctionSearchSubIndex)
         if sub and sub ~= "None" then catLabel = catLabel .. " > " .. sub end
     end
+    if orctionSearchInvType then
+        catLabel = catLabel .. " > " .. Orction_GetInvTypeName(orctionSearchInvType)
+    end
     return catLabel
 end
 
-local function Orction_SetSearchCategory(classIndex, subIndex)
+local function Orction_SetSearchCategory(classIndex, subIndex, invType)
     orctionSearchClassIndex = classIndex or 0
     orctionSearchSubIndex   = subIndex or 0
+    if orctionSearchSubIndex <= 0 then
+        orctionSearchInvType = nil
+    else
+        orctionSearchInvType = invType or nil
+    end
     if OrctionCategoryDropDown then
         UIDropDownMenu_SetSelectedValue(OrctionCategoryDropDown, orctionSearchClassIndex)
         UIDropDownMenu_SetText(Orction_GetClassName(orctionSearchClassIndex), OrctionCategoryDropDown)
@@ -217,6 +231,25 @@ local function Orction_SetSearchCategory(classIndex, subIndex)
             else
                 local btn = getglobal(OrctionSubcategoryDropDown:GetName() .. "Button")
                 if btn then btn:Enable() end
+            end
+        end
+    end
+    if OrctionSlotDropDown then
+        local hasSubcat = subIndex and subIndex > 0
+        UIDropDownMenu_SetText(orctionSearchInvType and Orction_GetInvTypeName(orctionSearchInvType) or "All", OrctionSlotDropDown)
+        if hasSubcat then
+            if UIDropDownMenu_EnableDropDown then
+                UIDropDownMenu_EnableDropDown(OrctionSlotDropDown)
+            else
+                local btn = getglobal(OrctionSlotDropDown:GetName() .. "Button")
+                if btn then btn:Enable() end
+            end
+        else
+            if UIDropDownMenu_DisableDropDown then
+                UIDropDownMenu_DisableDropDown(OrctionSlotDropDown)
+            else
+                local btn = getglobal(OrctionSlotDropDown:GetName() .. "Button")
+                if btn then btn:Disable() end
             end
         end
     end
@@ -265,7 +298,8 @@ function Orction_InitSubcategoryDropDown()
         info.value = 0
         info.func = function()
             UIDropDownMenu_SetSelectedValue(OrctionSubcategoryDropDown, 0)
-            Orction_SetSearchCategory(orctionSearchClassIndex, 0)
+            Orction_SetSearchCategory(orctionSearchClassIndex, 0, nil)
+            Orction_InitSlotDropDown()
         end
         info.checked = (orctionSearchSubIndex == 0)
         UIDropDownMenu_AddButton(info)
@@ -282,7 +316,8 @@ function Orction_InitSubcategoryDropDown()
             info.value = idx
             info.func = function()
                 UIDropDownMenu_SetSelectedValue(OrctionSubcategoryDropDown, idx)
-                Orction_SetSearchCategory(orctionSearchClassIndex, idx)
+                Orction_SetSearchCategory(orctionSearchClassIndex, idx, nil)
+                Orction_InitSlotDropDown()
             end
             info.checked = (orctionSearchSubIndex == idx)
             UIDropDownMenu_AddButton(info)
@@ -290,19 +325,57 @@ function Orction_InitSubcategoryDropDown()
     end)
 end
 
+function Orction_InitSlotDropDown()
+    if not OrctionSlotDropDown then return end
+    UIDropDownMenu_Initialize(OrctionSlotDropDown, function()
+        local info = UIDropDownMenu_CreateInfo()
+        info.text  = "All"
+        info.value = nil
+        info.func  = function()
+            UIDropDownMenu_SetText("All", OrctionSlotDropDown)
+            Orction_SetSearchCategory(orctionSearchClassIndex, orctionSearchSubIndex, nil)
+        end
+        info.checked = (orctionSearchInvType == nil)
+        UIDropDownMenu_AddButton(info)
+
+        if not orctionSearchClassIndex or orctionSearchClassIndex <= 0 or
+           not orctionSearchSubIndex   or orctionSearchSubIndex   <= 0 then
+            return
+        end
+        local invTypes = { GetAuctionInvTypes(orctionSearchClassIndex, orctionSearchSubIndex) }
+        for i = 1, table.getn(invTypes) do
+            local t = invTypes[i]
+            info = UIDropDownMenu_CreateInfo()
+            info.text  = getglobal(t) or t
+            info.value = t
+            info.func  = function()
+                UIDropDownMenu_SetText(getglobal(t) or t, OrctionSlotDropDown)
+                Orction_SetSearchCategory(orctionSearchClassIndex, orctionSearchSubIndex, t)
+            end
+            info.checked = (orctionSearchInvType == t)
+            UIDropDownMenu_AddButton(info)
+        end
+    end)
+end
+
 local function Orction_Query(name, page)
-    local classIdx = orctionSearchClassIndex
-    local subIdx   = orctionSearchSubIndex
+    local classIdx = orctionSearchClassIndex > 0 and orctionSearchClassIndex or nil
+    local subIdx   = orctionSearchSubIndex   > 0 and orctionSearchSubIndex   or nil
+    -- QueryAuctionItems expects a 1-based numeric index for invType, not the INVTYPE string
+    local invTypeIdx = nil
+    if orctionSearchInvType and classIdx and subIdx then
+        local types = { GetAuctionInvTypes(orctionSearchClassIndex, orctionSearchSubIndex) }
+        for i = 1, table.getn(types) do
+            if types[i] == orctionSearchInvType then
+                invTypeIdx = i
+                break
+            end
+        end
+    end
     local p        = page or 0
     local usable   = orctionUsableOnly and 1 or nil
     local qname    = (name and string.len(name) > 0) and name or ""
-    if classIdx and classIdx > 0 and subIdx and subIdx > 0 then
-        QueryAuctionItems(qname, nil, nil, nil, classIdx, subIdx, p, usable, nil)
-    elseif classIdx and classIdx > 0 then
-        QueryAuctionItems(qname, nil, nil, nil, classIdx, nil, p, usable, nil)
-    else
-        QueryAuctionItems(qname, nil, nil, nil, nil, nil, p, usable, nil)
-    end
+    QueryAuctionItems(qname, nil, nil, invTypeIdx, classIdx, subIdx, p, usable, nil)
 end
 
 -- ── Vendor price cache (tooltip hook) ─────────────────────────────────────
@@ -995,7 +1068,8 @@ local function Orction_CollectPage()
 
     local nextPage  = orctionSearchPage + 1
     local pageLimit = orctionSearchStartPage + ORCTION_MAX_PAGES
-    local underLimit = orctionFullScanActive or (nextPage < pageLimit)
+    local subcatActive = (orctionSearchSubIndex and orctionSearchSubIndex > 0) or (orctionSearchInvType ~= nil)
+    local underLimit = orctionFullScanActive or subcatActive or (nextPage < pageLimit)
     if underLimit and batch > 0 then
         orctionSearchPage  = nextPage
         orctionSearchRetry = true   -- OnUpdate will fire the next query after a short delay
@@ -1061,7 +1135,7 @@ local function Orction_StartSearch(name, classIndex, subIndex)
     orctionPriceWriteQueue   = {}
     orctionSearchRecorded    = {}
     orctionVendorPrice   = (OrctionDB and OrctionDB.vendorPrices and OrctionDB.vendorPrices[name]) or 0
-    Orction_SetSearchCategory(classIndex or orctionSearchClassIndex, subIndex or orctionSearchSubIndex)
+    Orction_SetSearchCategory(classIndex or orctionSearchClassIndex, subIndex or orctionSearchSubIndex, orctionSearchInvType)
     if OrctionVendorSellValue   then OrctionVendorSellValue:SetText("--") end
     if OrctionSimilarResultsText then OrctionSimilarResultsText:Hide() end
     for i = 1, table.getn(orctionResultRows) do
@@ -1138,9 +1212,14 @@ local function Orction_TryBuy()
         local name, _, _, _, _, _, _, _, buyoutPrice = GetAuctionItemInfo("list", i)
         if name == buyName and buyoutPrice == buyBuyout then
             PlaceAuctionBid("list", i, buyoutPrice)
-            orctionBuyBidPlaced    = true
-            orctionBuyBidTimeout   = 0
+            -- Optimistic update: remove from local cache and refresh display immediately.
+            -- Waiting for server confirmation would fail to update when identical listings exist.
+            removeFirst(orctionSearchResults)
+            removeFirst(orctionSimilarResults)
+            orctionBuyPending      = nil
+            orctionBuyBidPlaced    = false
             orctionBuyBidRechecked = false
+            Orction_DisplayResults()
             return
         end
     end
@@ -1211,9 +1290,21 @@ local function Orction_FindBagSlot(itemName, needed, excludeSlots)
     return nil
 end
 
+-- Synchronously flush the entire pending price write queue into the DB.
+local function Orction_FlushWriteQueue()
+    if not OrctionData_RecordScanPrice then return end
+    while table.getn(orctionPriceWriteQueue) > 0 do
+        local item = table.remove(orctionPriceWriteQueue, 1)
+        if not OrctionData_ShouldRecord or OrctionData_ShouldRecord(item.itemId, item.name) then
+            OrctionData_RecordScanPrice(item.itemId, item.name, item.price, 1)
+        end
+    end
+end
+
 -- Loads 7-day price history for the given item name and refreshes the bar graph.
 local function Orction_UpdatePriceGraph(name)
     if not orctionPriceBarGraph then return end
+    Orction_FlushWriteQueue()  -- ensure pending scan data is written before lookup
     local entry = OrctionData_GetItemHistory and OrctionData_GetItemHistory(nil, name)
     if not entry then
         orctionPriceBarGraph:Hide()
@@ -1283,6 +1374,7 @@ local function Orction_CompleteItemDrop(name, texture, count)
     if OrctionSearchBox then OrctionSearchBox:SetText(name) end
     orctionVendorPrice = Orction_GetVendorPrice(name)
     Orction_UpdateDeposit()
+    Orction_FlushWriteQueue()  -- preserve pending data before StartSearch wipes the queue
     Orction_StartSearch(name, 0, 0)
     Orction_UpdatePriceGraph(name)
 end
@@ -1832,7 +1924,7 @@ local function Orction_StartFullScan()
     local catLabel = Orction_GetCategoryLabel()
     DEFAULT_CHAT_FRAME:AddMessage("Orction: scanning [" .. catLabel .. "]...")
     Orction_UpdateSearchingText()
-    Orction_SetSearchCategory(orctionSearchClassIndex, orctionSearchSubIndex)
+    Orction_SetSearchCategory(orctionSearchClassIndex, orctionSearchSubIndex, orctionSearchInvType)
     Orction_Query("", 0)
 end
 
@@ -2035,11 +2127,23 @@ local function Orction_BuildAHPanel()
         if btn then btn:Disable() end
     end
 
+    OrctionSlotDropDown = CreateFrame("Frame", "OrctionSlotDropDown", OrctionAHPanel, "UIDropDownMenuTemplate")
+    OrctionSlotDropDown:SetPoint("LEFT", OrctionSubcategoryDropDown, "RIGHT", -15, 0)
+    UIDropDownMenu_SetWidth(60, OrctionSlotDropDown)
+    UIDropDownMenu_SetText("All", OrctionSlotDropDown)
+    if UIDropDownMenu_DisableDropDown then
+        UIDropDownMenu_DisableDropDown(OrctionSlotDropDown)
+    else
+        local btn = getglobal("OrctionSlotDropDownButton")
+        if btn then btn:Disable() end
+    end
+
     Orction_InitCategoryDropDown()
     Orction_InitSubcategoryDropDown()
+    Orction_InitSlotDropDown()
 
     local OrctionUsableCheck = CreateFrame("CheckButton", "OrctionUsableCheck", OrctionAHPanel, "OptionsCheckButtonTemplate")
-    OrctionUsableCheck:SetPoint("LEFT", OrctionSubcategoryDropDown, "RIGHT", 0, -2)
+    OrctionUsableCheck:SetPoint("TOPRIGHT", OrctionAHPanel, "TOPRIGHT", -35, -45)
     getglobal("OrctionUsableCheckText"):SetText("Usable")
     OrctionUsableCheck:SetWidth(30)
     OrctionUsableCheck:SetHitRectInsets(0, 5, 0, 0)
