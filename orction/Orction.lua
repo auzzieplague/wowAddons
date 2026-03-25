@@ -689,6 +689,86 @@ local function Orction_CreateResultRow(i)
     rowBtn:Hide()
 end
 
+function Orction_ShowOnMap(vname, zone, x, y)
+    if not zone or not x or not y then
+        DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00" .. (vname or "Vendor") .. "|r  (no location data)")
+        return
+    end
+
+    -- Find continent + zone index via GetMapZones
+    local continent, zoneIdx
+    for c = 1, 2 do
+        local zones = { GetMapZones(c) }
+        for i, zname in ipairs(zones) do
+            if zname == zone then
+                continent = c
+                zoneIdx   = i
+                break
+            end
+        end
+        if continent then break end
+    end
+
+    if not continent then
+        DEFAULT_CHAT_FRAME:AddMessage("Orction: map zone not found: " .. zone)
+        return
+    end
+
+    -- Create pin lazily
+    if not getglobal("OrctionMapPin") then
+        local pin = CreateFrame("Frame", "OrctionMapPin", WorldMapDetailFrame)
+        pin:SetWidth(14)
+        pin:SetHeight(14)
+        pin:SetFrameStrata("TOOLTIP")
+
+        local bg = pin:CreateTexture(nil, "BACKGROUND")
+        bg:SetPoint("TOPLEFT",     pin, "TOPLEFT",     -2,  2)
+        bg:SetPoint("BOTTOMRIGHT", pin, "BOTTOMRIGHT",  2, -2)
+        bg:SetTexture(0, 0, 0, 0.75)
+
+        local dot = pin:CreateTexture(nil, "OVERLAY")
+        dot:SetAllPoints(pin)
+        dot:SetTexture(1, 0.82, 0, 1)
+
+        local lbl = pin:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        lbl:SetPoint("TOP", pin, "BOTTOM", 0, -2)
+        lbl:SetTextColor(1, 0.82, 0)
+        pin.lbl = lbl
+        pin:Hide()
+    end
+
+    -- Stash target on pin so the deferred setter can read it
+    local pin = getglobal("OrctionMapPin")
+    pin.tc = continent
+    pin.tz = zoneIdx
+    pin.tx = x
+    pin.ty = y
+    pin.tn = vname
+
+    -- Open map first — its OnShow calls SetMapToCurrentZone which would
+    -- override SetMapZoom, so we defer the zoom to the next frame via OnUpdate.
+    ShowUIPanel(WorldMapFrame)
+
+    if not getglobal("OrctionMapZoomSetter") then
+        CreateFrame("Frame", "OrctionMapZoomSetter")
+    end
+    local setter = getglobal("OrctionMapZoomSetter")
+    setter:SetScript("OnUpdate", function()
+        this:SetScript("OnUpdate", nil)
+        local p = getglobal("OrctionMapPin")
+        SetMapZoom(p.tc, p.tz)
+        local mapW = WorldMapDetailFrame:GetWidth()
+        local mapH = WorldMapDetailFrame:GetHeight()
+        p:SetParent(WorldMapDetailFrame)
+        p:ClearAllPoints()
+        p:SetPoint("CENTER", WorldMapDetailFrame, "TOPLEFT",
+            (p.tx / 100) * mapW,
+            -(p.ty / 100) * mapH)
+        p.lbl:SetText(p.tn)
+        p:Show()
+    end)
+end
+
 function Orction_BuildVendorInfoFrame()
     local f = CreateFrame("Frame", "OrctionVendorInfoFrame", UIParent)
     f:SetWidth(460)
@@ -859,15 +939,7 @@ Orction_ShowVendorInfo = function(row)
             r.zoneFS:SetText(zone or "")
 
             r.locBtn:SetScript("OnClick", function()
-                if zone then
-                    local msg = "|cffffcc00" .. vname .. "|r  " .. zone
-                    if lx and ly then
-                        msg = msg .. string.format("  (%.1f, %.1f)", lx, ly)
-                    end
-                    DEFAULT_CHAT_FRAME:AddMessage(msg)
-                else
-                    DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00" .. vname .. "|r  (no location data)")
-                end
+                Orction_ShowOnMap(vname, zone, lx, ly)
             end)
             r.locBtn:Show()
             r.nameFS:Show()
