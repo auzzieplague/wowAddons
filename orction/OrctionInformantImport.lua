@@ -66,7 +66,7 @@ local function Orction_TryImport()
 
             if buy > 0 or merchants ~= "" then
                 if not OrctionDB.vendorMerchantById[itemId] then
-                    OrctionDB.vendorMerchantById[itemId] = { buy = buy, merchants = merchants }
+                    OrctionDB.vendorMerchantById[itemId] = { buy = buy, merchants = merchants, vendorIds = vendorIds }
                 end
             end
             if sell > 0 then

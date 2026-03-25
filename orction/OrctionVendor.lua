@@ -80,16 +80,17 @@ function OrctionVendor_GetCache()
 end
 
 -- Returns vendor buy price and merchant list for an item, or 0/nil if unknown.
+-- Returns buy price, resolved merchant names, and raw vendor ID string.
 function OrctionVendor_GetBuyInfo(itemId, itemName)
     if OrctionDB and itemId and OrctionDB.vendorMerchantById then
         local e = OrctionDB.vendorMerchantById[itemId]
-        if e then return e.buy or 0, e.merchants end
+        if e then return e.buy or 0, e.merchants, e.vendorIds end
     end
     if OrctionDB and itemName and OrctionDB.vendorMerchantByName then
         local e = OrctionDB.vendorMerchantByName[itemName]
-        if e then return e.buy or 0, e.merchants end
+        if e then return e.buy or 0, e.merchants, e.vendorIds end
     end
-    return 0, nil
+    return 0, nil, nil
 end
 
 -- Resolves a raw merchants string (which may contain numeric IDs from old DB data)

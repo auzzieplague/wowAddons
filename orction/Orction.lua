@@ -62,6 +62,7 @@ local orctionBuyBidTimeout     = 0     -- seconds since bid was placed with no A
 local orctionBuyBidRechecked   = false -- true after one fallback re-query was fired
 local orctionPriceWriteQueue   = {}    -- {itemId, name, price} items waiting for async DB write
 local orctionSellerFilter      = nil   -- player name to filter results by (nil = no filter)
+local orctionCurrentGroups     = {}    -- last displayed groups (one entry per result row)
 local orctionSearchRecorded    = {}    -- key→true: items already queued for recording this search
 
 -- ── Helpers ───────────────────────────────────────────────────────────────
@@ -670,7 +671,7 @@ local function Orction_CreateResultRow(i)
                               sellerFS = sellerFS,
                               isEven = (math.mod(i, 2) == 0),
                               costPerItem = nil, firstBuyout = nil, itemName = nil, itemId = nil,
-                              texture = nil, vendorPrice = nil, vendorBuy = nil, vendorMerchants = nil,
+                              texture = nil, vendorPrice = nil, vendorBuy = nil, vendorMerchants = nil, vendorIds = nil,
                               vendorSold = nil, seller = nil, quality = nil }
 
     rowBtn:SetScript("OnEnter", function()
@@ -688,47 +689,199 @@ local function Orction_CreateResultRow(i)
     rowBtn:Hide()
 end
 
+function Orction_BuildVendorInfoFrame()
+    local f = CreateFrame("Frame", "OrctionVendorInfoFrame", UIParent)
+    f:SetWidth(460)
+    f:SetHeight(330)
+    f:SetFrameStrata("DIALOG")
+    f:SetBackdrop({
+        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
+        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+        tile = true, tileSize = 32, edgeSize = 32,
+        insets = { left = 11, right = 12, top = 12, bottom = 11 },
+    })
+    f:SetPoint("CENTER", UIParent, "CENTER", 0, 60)
+    f:EnableMouse(true)
+    f:SetMovable(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", function() this:StartMoving() end)
+    f:SetScript("OnDragStop",  function() this:StopMovingOrSizing() end)
+    f:Hide()
+
+    local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+    closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -5, -5)
+    closeBtn:SetScript("OnClick", function() f:Hide() end)
+
+    local titleFS = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    titleFS:SetPoint("TOP", f, "TOP", 0, -18)
+    titleFS:SetWidth(400)
+    titleFS:SetJustifyH("CENTER")
+
+    local savingsFS = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    savingsFS:SetPoint("TOP", titleFS, "BOTTOM", 0, -6)
+    savingsFS:SetWidth(400)
+    savingsFS:SetJustifyH("CENTER")
+
+    -- Column headers:  Vendor(18)  Price(210)  Location(290)
+    local hdrVendor = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    hdrVendor:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -72)
+    hdrVendor:SetText("Vendor")
+
+    local hdrPrice = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    hdrPrice:SetPoint("TOPLEFT", f, "TOPLEFT", 210, -72)
+    hdrPrice:SetText("Price")
+
+    local hdrLoc = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    hdrLoc:SetPoint("TOPLEFT", f, "TOPLEFT", 290, -72)
+    hdrLoc:SetText("Location")
+
+    local div = f:CreateTexture(nil, "ARTWORK")
+    div:SetTexture(0.5, 0.5, 0.5, 0.5)
+    div:SetPoint("TOPLEFT",  f, "TOPLEFT",  18, -84)
+    div:SetPoint("TOPRIGHT", f, "TOPRIGHT", -18, -84)
+    div:SetHeight(1)
+
+    -- 10 vendor rows
+    local rows = {}
+    for i = 1, 10 do
+        local yOff = -88 - (i - 1) * 22
+
+        local nameFS = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        nameFS:SetPoint("TOPLEFT", f, "TOPLEFT", 18, yOff)
+        nameFS:SetWidth(186)
+        nameFS:SetJustifyH("LEFT")
+
+        local priceFS = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        priceFS:SetPoint("TOPLEFT", f, "TOPLEFT", 210, yOff)
+        priceFS:SetWidth(74)
+        priceFS:SetJustifyH("LEFT")
+
+        local zoneFS = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        zoneFS:SetPoint("TOPLEFT", f, "TOPLEFT", 290, yOff)
+        zoneFS:SetWidth(100)
+        zoneFS:SetJustifyH("LEFT")
+
+        local locBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+        locBtn:SetWidth(52)
+        locBtn:SetHeight(18)
+        locBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 396, yOff + 2)
+        locBtn:SetText("Locate")
+        local lfs = locBtn:GetFontString()
+        if lfs then
+            local fn, _, fl = lfs:GetFont()
+            lfs:SetFont(fn or STANDARD_TEXT_FONT, 8, fl or "")
+        end
+        locBtn:Hide()
+
+        rows[i] = { nameFS = nameFS, priceFS = priceFS, zoneFS = zoneFS, locBtn = locBtn }
+    end
+
+    f.titleFS   = titleFS
+    f.savingsFS = savingsFS
+    f.rows      = rows
+    return f
+end
+
 Orction_ShowVendorInfo = function(row)
     if not row then return end
+
     local buy = row.vendorBuy or 0
     local rawMerchants = row.vendorMerchants
     if (buy == 0 and (not rawMerchants or rawMerchants == "")) and OrctionVendor_GetBuyInfo then
         buy, rawMerchants = OrctionVendor_GetBuyInfo(row.itemId, row.itemName)
     end
-    -- Resolve raw merchants string (may contain old numeric IDs) to actual names
-    local merchants = OrctionVendor_ResolveMerchants and OrctionVendor_ResolveMerchants(rawMerchants) or ""
     local ah = row.costPerItem or 0
 
-    local lines = {}
-    if row.itemName and row.itemName ~= "" then
-        table.insert(lines, row.itemName)
-    end
-
-    -- List each vendor on its own line
-    if merchants ~= "" then
-        for vendor in string.gfind(merchants .. ",", "([^,]+),") do
-            vendor = string.gsub(vendor, "^%s*(.-)%s*$", "%1")
-            if vendor ~= "" then
-                if buy > 0 then
-                    table.insert(lines, vendor .. "  (" .. Orction_FormatMoney(buy) .. ")")
-                else
-                    table.insert(lines, vendor)
-                end
-            end
+    -- Parse raw merchant entries (may be numeric IDs or "Name <Title>" strings)
+    local rawParts = {}
+    if rawMerchants and rawMerchants ~= "" then
+        for part in string.gfind(rawMerchants .. ",", "([^,]+),") do
+            part = string.gsub(part, "^%s*(.-)%s*$", "%1")
+            if part ~= "" then table.insert(rawParts, part) end
         end
-    elseif buy > 0 then
-        table.insert(lines, "Vendor price: " .. Orction_FormatMoney(buy))
     end
 
-    if ah > 0 then
-        table.insert(lines, "AH buyout: " .. Orction_FormatMoney(ah))
+    -- Build reverse lookup: clean name -> informant_id (for name-based entries)
+    local nameToInfId = {}
+    if OrctionInformantVendors then
+        for id, fullname in pairs(OrctionInformantVendors) do
+            local clean = string.gsub(fullname, "%s*<[^>]+>%s*$", "")
+            nameToInfId[clean] = id
+        end
     end
+
+    local f = getglobal("OrctionVendorInfoFrame")
+    if not f then f = Orction_BuildVendorInfoFrame() end
+
+    f.titleFS:SetText(row.itemName or "")
+
     if buy > 0 and ah > 0 then
         local diff = ah - buy
-        local sign = diff >= 0 and "+" or "-"
-        table.insert(lines, "Saving: " .. sign .. Orction_FormatMoney(math.abs(diff)))
+        if diff > 0 then
+            f.savingsFS:SetText("|cff00ff00Purchase from a vendor to save: " .. Orction_FormatMoney(diff) .. "|r")
+        else
+            f.savingsFS:SetText("|cffff6060AH is cheaper by: " .. Orction_FormatMoney(math.abs(diff)) .. "|r")
+        end
+    elseif buy > 0 then
+        f.savingsFS:SetText("Vendor price: " .. Orction_FormatMoney(buy))
+    else
+        f.savingsFS:SetText("")
     end
-    StaticPopup_Show("ORCTION_VENDOR_INFO", table.concat(lines, "\n"))
+
+    for i = 1, 10 do
+        local r   = f.rows[i]
+        local raw = rawParts[i]
+        if raw then
+            -- Resolve infId and display name from either a numeric ID or a name string
+            local infId = tonumber(raw)
+            local vname
+            if infId then
+                -- Stored as numeric informant ID — look up the name
+                local fullname = OrctionInformantVendors and OrctionInformantVendors[infId]
+                vname = fullname and string.gsub(fullname, "%s*<[^>]+>%s*$", "") or raw
+            else
+                -- Stored as "Name <Title>" — strip title, reverse-lookup infId
+                vname = string.gsub(raw, "%s*<[^>]+>%s*$", "")
+                infId = nameToInfId[vname]
+            end
+
+            r.nameFS:SetText(vname)
+            r.priceFS:SetText(buy > 0 and Orction_FormatMoney(buy) or "")
+
+            local locData = infId and OrctionVendorIndex and OrctionVendorIndex[infId]
+            local zone, lx, ly
+            if locData then
+                local zoneId = locData[2]
+                lx, ly = locData[3], locData[4]
+                zone = OrctionVendorZones and zoneId and zoneId > 0 and OrctionVendorZones[zoneId] or nil
+            end
+
+            r.zoneFS:SetText(zone or "")
+
+            r.locBtn:SetScript("OnClick", function()
+                if zone then
+                    local msg = "|cffffcc00" .. vname .. "|r  " .. zone
+                    if lx and ly then
+                        msg = msg .. string.format("  (%.1f, %.1f)", lx, ly)
+                    end
+                    DEFAULT_CHAT_FRAME:AddMessage(msg)
+                else
+                    DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00" .. vname .. "|r  (no location data)")
+                end
+            end)
+            r.locBtn:Show()
+            r.nameFS:Show()
+            r.priceFS:Show()
+            r.zoneFS:Show()
+        else
+            r.nameFS:SetText("")
+            r.priceFS:SetText("")
+            r.zoneFS:SetText("")
+            r.locBtn:Hide()
+        end
+    end
+
+    f:Show()
 end
 
 -- ── Search logic ──────────────────────────────────────────────────────────
@@ -795,6 +948,7 @@ local function Orction_DisplayResults()
                             vendorPrice = item.vendorPrice or 0,
                             vendorBuy   = item.vendorBuy or 0,
                             vendorMerchants = item.vendorMerchants,
+                            vendorIds   = item.vendorIds,
                             vendorSold  = (item.vendorBuy and item.vendorBuy > 0) or (item.vendorMerchants and item.vendorMerchants ~= ""),
                             totalCount  = 0, numAuctions = 0,
                             firstBuyout = item.buyout,
@@ -832,6 +986,8 @@ local function Orction_DisplayResults()
         end
         groups = filtered
     end
+
+    orctionCurrentGroups = groups
 
     -- Update progress text only while actively searching/scanning.
     -- On completion the caller sets the text directly; we leave it alone.
@@ -914,6 +1070,7 @@ local function Orction_DisplayResults()
             row.vendorPrice = g.vendorPrice
             row.vendorBuy   = g.vendorBuy
             row.vendorMerchants = g.vendorMerchants
+            row.vendorIds   = g.vendorIds
             row.vendorSold  = g.vendorSold
             row.cost:SetText(FormatMoneyColour(g.costPerItem))
             row.qty:SetText(tostring(g.totalCount))
@@ -1042,8 +1199,9 @@ local function Orction_CollectPage()
             end
             local vendorBuy = 0
             local vendorMerchants = nil
+            local vendorIds = nil
             if OrctionVendor_GetBuyInfo then
-                vendorBuy, vendorMerchants = OrctionVendor_GetBuyInfo(itemId, name)
+                vendorBuy, vendorMerchants, vendorIds = OrctionVendor_GetBuyInfo(itemId, name)
             end
             local entry = {
                 name        = name,
@@ -1055,6 +1213,7 @@ local function Orction_CollectPage()
                 vendorPrice = vPrice,
                 vendorBuy   = vendorBuy,
                 vendorMerchants = vendorMerchants,
+                vendorIds   = vendorIds,
                 quality     = quality,
                 owner       = owner or "",
             }
@@ -1710,13 +1869,6 @@ StaticPopupDialogs["ORCTION_STACK_CONFIRM"] = {
     end,
 }
 
-StaticPopupDialogs["ORCTION_VENDOR_INFO"] = {
-    text         = "%s",
-    button1      = "OK",
-    timeout      = 0,
-    whileDead    = false,
-    hideOnEscape = true,
-}
 
 -- ── Build the AH panel ────────────────────────────────────────────────────
 
@@ -2076,16 +2228,15 @@ end
 -- ── Export current results to CSV ─────────────────────────────────────────
 
 function Orction_ExportResults()
-    local results = orctionSimilarResults
-    if not results or table.getn(results) == 0 then
+    if not orctionCurrentGroups or table.getn(orctionCurrentGroups) == 0 then
         DEFAULT_CHAT_FRAME:AddMessage("Orction: no results to export")
         return
     end
     local lines = {"item,cost,seller"}
-    for _, item in ipairs(results) do
-        local name   = item.name    or ""
-        local cost   = item.costPerItem or 0
-        local seller = item.owner   or ""
+    for _, g in ipairs(orctionCurrentGroups) do
+        local name   = g.name   or ""
+        local cost   = g.costPerItem or 0
+        local seller = g.seller or ""
         if string.find(name,   ",") then name   = '"' .. name   .. '"' end
         if string.find(seller, ",") then seller = '"' .. seller .. '"' end
         table.insert(lines, name .. "," .. cost .. "," .. seller)
@@ -2750,7 +2901,7 @@ local function Orction_BuildAHPanel()
     expClose:SetPoint("TOPRIGHT", exportFrame, "TOPRIGHT", 2, 2)
     expClose:SetScript("OnClick", function() exportFrame:Hide() end)
 
-    local expScrollFrame = CreateFrame("ScrollFrame", nil, exportFrame, "UIPanelScrollFrameTemplate")
+    local expScrollFrame = CreateFrame("ScrollFrame", "OrctionExportScrollFrame", exportFrame, "UIPanelScrollFrameTemplate")
     expScrollFrame:SetPoint("TOPLEFT",     exportFrame, "TOPLEFT",     8,  -28)
     expScrollFrame:SetPoint("BOTTOMRIGHT", exportFrame, "BOTTOMRIGHT", -26,  8)
 
