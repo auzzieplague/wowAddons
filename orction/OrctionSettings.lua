@@ -564,34 +564,6 @@ dataOffsetSlider:SetScript("OnValueChanged", function()
     end
 end)
 
-local confLabel = dataPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-confLabel:SetPoint("TOPLEFT", dataOffsetLabel, "BOTTOMLEFT", 0, -10)
-confLabel:SetText("Confidence Factor")
-
-local confSlider = CreateFrame("Slider", "OrctionConfidenceSlider", dataPanel, "OptionsSliderTemplate")
-confSlider:SetWidth(120)
-confSlider:SetPoint("LEFT", confLabel, "RIGHT", 8, 0)
-confSlider:SetMinMaxValues(0.5, 3.0)
-confSlider:SetValueStep(0.1)
-confSlider:SetValue(1.0)
-
-getglobal("OrctionConfidenceSliderLow"):SetText("0.5")
-getglobal("OrctionConfidenceSliderHigh"):SetText("3.0")
-
-local confValueText = dataPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-confValueText:SetPoint("LEFT", confSlider, "RIGHT", 6, 0)
-confValueText:SetText("1.0")
-
-confSlider:SetScript("OnValueChanged", function()
-    local val = this:GetValue()
-    val = math.floor(val * 10 + 0.5) / 10
-    confValueText:SetText(string.format("%.1f", val))
-    ORCTION_CONFIDENCE_FACTOR = val
-    if OrctionDB and OrctionDB.settings then
-        OrctionDB.settings.confidenceFactor = val
-    end
-end)
-
 local purgeBtn = CreateFrame("Button", nil, dataPanel, "UIPanelButtonTemplate")
 purgeBtn:SetWidth(90)
 purgeBtn:SetHeight(22)
@@ -615,7 +587,7 @@ analyzeBtn:SetScript("OnClick", function()
 end)
 
 local syncCheck = CreateFrame("CheckButton", "OrctionSyncEnabledCheck", dataPanel, "UICheckButtonTemplate")
-syncCheck:SetPoint("BOTTOMRIGHT", purgeBtn, "TOPRIGHT", 0, 8)
+syncCheck:SetPoint("BOTTOMRIGHT", purgeBtn, "TOPRIGHT", -100, 8)
 local syncCheckText = getglobal("OrctionSyncEnabledCheckText")
 syncCheckText:SetText("Sync Data")
 syncCheck:SetScript("OnClick", function()
@@ -717,7 +689,7 @@ end
 local prevBtn = CreateFrame("Button", nil, dataPanel, "UIPanelButtonTemplate")
 prevBtn:SetWidth(60)
 prevBtn:SetHeight(20)
-prevBtn:SetPoint("TOPLEFT", rowsFrame, "BOTTOMLEFT", 0, -8)
+prevBtn:SetPoint("TOPLEFT", rowsFrame, "BOTTOMLEFT", 0, 22)
 prevBtn:SetText("Prev")
 prevBtn:SetScript("OnClick", function()
     dataPage = dataPage - 1
@@ -737,6 +709,33 @@ end)
 OrctionDataPageText = dataPanel:CreateFontString("OrctionDataPageText", "OVERLAY", "GameFontHighlightSmall")
 OrctionDataPageText:SetPoint("LEFT", nextBtn, "RIGHT", 10, 0)
 OrctionDataPageText:SetText("Page 1 / 1")
+local confLabel = dataPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+confLabel:SetPoint("TOPLEFT", prevBtn, "BOTTOMLEFT", 0, -8)
+confLabel:SetText("Confidence Factor")
+
+local confSlider = CreateFrame("Slider", "OrctionConfidenceSlider", dataPanel, "OptionsSliderTemplate")
+confSlider:SetWidth(120)
+confSlider:SetPoint("LEFT", confLabel, "RIGHT", 8, 0)
+confSlider:SetMinMaxValues(0.5, 3.0)
+confSlider:SetValueStep(0.1)
+confSlider:SetValue(1.0)
+
+getglobal("OrctionConfidenceSliderLow"):SetText("0.5")
+getglobal("OrctionConfidenceSliderHigh"):SetText("3.0")
+
+local confValueText = dataPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+confValueText:SetPoint("LEFT", confSlider, "RIGHT", 6, 0)
+confValueText:SetText("1.0")
+
+confSlider:SetScript("OnValueChanged", function()
+    local val = this:GetValue()
+    val = math.floor(val * 10 + 0.5) / 10
+    confValueText:SetText(string.format("%.1f", val))
+    ORCTION_CONFIDENCE_FACTOR = val
+    if OrctionDB and OrctionDB.settings then
+        OrctionDB.settings.confidenceFactor = val
+    end
+end)
 purgeBtn:SetPoint("BOTTOMRIGHT", OrctionFrame, "BOTTOMRIGHT", -110, 12)
 analyzeBtn:SetPoint("LEFT", purgeBtn, "RIGHT", 6, 0)
 

@@ -640,7 +640,10 @@ local function Orction_CreateResultRow(i)
     infoBtn:SetScript("OnMouseUp", function()
         this:GetParent():SetScript("OnClick", function()
             local row = orctionResultRows[idx]
-            if row then Orction_ShowVendorInfo(row) end
+            if row and row.costPerItem then
+                local count = math.max(1, tonumber(OrctionCountBox:GetText()) or 1)
+                MoneyInputFrame_SetCopper(OrctionBuyout, row.costPerItem * count)
+            end
         end)
     end)
     infoBtn:SetScript("OnClick", function()
@@ -870,6 +873,7 @@ Orction_ShowVendorInfo = function(row)
     if (buy == 0 and (not rawMerchants or rawMerchants == "")) and OrctionVendor_GetBuyInfo then
         buy, rawMerchants = OrctionVendor_GetBuyInfo(row.itemId, row.itemName)
     end
+    if (not rawMerchants or rawMerchants == "") and buy == 0 then return end
     local ah = row.costPerItem or 0
 
     -- Parse raw merchant entries (may be numeric IDs or "Name <Title>" strings)
