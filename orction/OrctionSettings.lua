@@ -49,7 +49,7 @@ titleBar:SetHeight(64)
 titleBar:SetPoint("TOP", OrctionFrame, "TOP", 0, 12)
 
 local titleText = OrctionFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-titleText:SetPoint("TOP", OrctionFrame, "TOP", 0, 6)
+titleText:SetPoint("TOP", OrctionFrame, "TOP", 0, -2)
 titleText:SetText("Orction")
 
 -------------------------------------------------------------------------------
@@ -334,26 +334,32 @@ local graphStyleLabel = auctionPanel:CreateFontString(nil, "OVERLAY", "GameFontN
 graphStyleLabel:SetPoint("TOPLEFT", vendorMultSlider, "BOTTOMLEFT", 0, -16)
 graphStyleLabel:SetText("Price Graph Style")
 
-local graphConfCheck = CreateFrame("CheckButton", "OrctionGraphConfCheck", auctionPanel, "OptionsCheckButtonTemplate")
-graphConfCheck:SetPoint("TOPLEFT", graphStyleLabel, "BOTTOMLEFT", 0, -4)
-getglobal("OrctionGraphConfCheckText"):SetText("Confidence")
+local graphStyleDropdown = CreateFrame("Frame", "OrctionGraphStyleDropdown", auctionPanel, "UIDropDownMenuTemplate")
+graphStyleDropdown:SetPoint("TOPLEFT", graphStyleLabel, "BOTTOMLEFT", -15, -4)
+UIDropDownMenu_SetWidth(100, graphStyleDropdown)
+UIDropDownMenu_SetText("Confidence", graphStyleDropdown)
+UIDropDownMenu_Initialize(graphStyleDropdown, function()
+    local info = UIDropDownMenu_CreateInfo()
 
-local graphFullCheck = CreateFrame("CheckButton", "OrctionGraphFullCheck", auctionPanel, "OptionsCheckButtonTemplate")
-graphFullCheck:SetPoint("LEFT", graphConfCheck, "RIGHT", 80, 0)
-getglobal("OrctionGraphFullCheckText"):SetText("Full")
+    info.text    = "Confidence"
+    info.value   = "positive"
+    info.checked = (ORCTION_GRAPH_STYLE == "positive")
+    info.func    = function()
+        ORCTION_GRAPH_STYLE = "positive"
+        UIDropDownMenu_SetText("Confidence", graphStyleDropdown)
+        if OrctionDB and OrctionDB.settings then OrctionDB.settings.graphStyle = "positive" end
+    end
+    UIDropDownMenu_AddButton(info)
 
-graphConfCheck:SetScript("OnClick", function()
-    ORCTION_GRAPH_STYLE = "positive"
-    graphConfCheck:SetChecked(1)
-    graphFullCheck:SetChecked(nil)
-    if OrctionDB and OrctionDB.settings then OrctionDB.settings.graphStyle = "positive" end
-end)
-
-graphFullCheck:SetScript("OnClick", function()
-    ORCTION_GRAPH_STYLE = "price"
-    graphConfCheck:SetChecked(nil)
-    graphFullCheck:SetChecked(1)
-    if OrctionDB and OrctionDB.settings then OrctionDB.settings.graphStyle = "price" end
+    info.text    = "Full"
+    info.value   = "price"
+    info.checked = (ORCTION_GRAPH_STYLE == "price")
+    info.func    = function()
+        ORCTION_GRAPH_STYLE = "price"
+        UIDropDownMenu_SetText("Full", graphStyleDropdown)
+        if OrctionDB and OrctionDB.settings then OrctionDB.settings.graphStyle = "price" end
+    end
+    UIDropDownMenu_AddButton(info)
 end)
 
 -------------------------------------------------------------------------------
@@ -1066,11 +1072,9 @@ settingsEventFrame:SetScript("OnEvent", function()
         ORCTION_CONFIDENCE_FACTOR = s.confidenceFactor
         ORCTION_GRAPH_STYLE       = s.graphStyle
 
-        if OrctionGraphConfCheck then
-            OrctionGraphConfCheck:SetChecked(s.graphStyle == "positive" and 1 or nil)
-        end
-        if OrctionGraphFullCheck then
-            OrctionGraphFullCheck:SetChecked(s.graphStyle == "price" and 1 or nil)
+        if OrctionGraphStyleDropdown then
+            local label = s.graphStyle == "price" and "Full" or "Confidence"
+            UIDropDownMenu_SetText(label, OrctionGraphStyleDropdown)
         end
 
         -- Ensure persistent tables exist

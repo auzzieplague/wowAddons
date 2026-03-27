@@ -2644,7 +2644,7 @@ local function Orction_BuildAHPanel()
 
     -- Price history bar graph
     orctionPriceBarGraph = OrctionBarGraph_Create(OrctionAHPanel, 157, 52)
-    orctionPriceBarGraph.frame:SetPoint("TOPLEFT", OrctionCreateBtn, "BOTTOMLEFT", -12, -8)
+    orctionPriceBarGraph.frame:SetPoint("TOPLEFT", OrctionCreateBtn, "BOTTOMLEFT", 3, -22)
 
     local watchlistToggleBtn = CreateFrame("Button", nil, OrctionAHPanel, "UIPanelButtonTemplate")
     watchlistToggleBtn:SetWidth(80)
