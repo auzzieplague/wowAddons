@@ -115,10 +115,17 @@ function OrctionBarGraph_Create(parent, width, height)
         for i = 1, n do
             local val        = values[i] or 0
             local pct        = maxVal > 0 and (val / maxVal) or 0
-            local n_obs      = (counts and counts[i]) or CONFIDENCE_THRESHOLD
-            local confidence = math.min(1, n_obs / (CONFIDENCE_THRESHOLD * factor))
-            local colorPct   = pct * confidence
-            local bh         = math.max(2, math.floor(colorPct * drawH))
+            local colorPct
+            local bh
+            if style == "price" then
+                colorPct = pct
+                bh       = val > 0 and math.max(2, math.floor(pct * drawH)) or 2
+            else
+                local n_obs      = (counts and counts[i]) or CONFIDENCE_THRESHOLD
+                local confidence = math.min(1, n_obs / (CONFIDENCE_THRESHOLD * factor))
+                colorPct = pct * confidence
+                bh       = math.max(2, math.floor(colorPct * drawH))
+            end
 
             -- Allocate bar frame on first use
             if not barFrames[i] then
@@ -202,7 +209,7 @@ function OrctionBarGraph_Create(parent, width, height)
                 b.tex:SetVertexColor(0.25, 0.25, 0.25, 0.5)
             else
                 local r, g, bl
-                if style == "positive" then
+                if style == "positive" or style == "price" then
                     r, g, bl = PositiveColor(colorPct)
                 else
                     r, g, bl = 0.4, 0.6, 1.0

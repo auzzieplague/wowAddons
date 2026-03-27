@@ -21,6 +21,7 @@ local orctionWaitTimeout     = 0     -- seconds waiting for non-zero batch on cu
 local orctionResponseReceived = false -- true once AUCTION_ITEM_LIST_UPDATE has fired for this query
 local orctionPendingPost     = nil   -- { name, startBid, buyout, count, stacksLeft, totalStacks }
 local orctionPriceBarGraph   = nil   -- bar-graph widget for item price history
+local orctionCurrentPreviewName = nil         -- name of item currently shown in the post panel
 local orctionPendingDrop     = nil   -- { name, texture, count } while confirm dialog is open
 local orctionVendorPrice     = nil   -- vendor sell price (copper) for the current search item
 local orctionSellName        = nil   -- name of the item currently in the sell slot (for Create Auction)
@@ -1560,6 +1561,8 @@ local function Orction_UpdatePriceGraph(name)
     end
     -- Compute day labels relative to today's rolling slot
     local todaySlot = math.mod((tonumber(date("%j")) or 1) + (ORCTION_DAY_OFFSET or 0), 7) + 1
+    local todayDow  = tonumber(date("%w")) or 0  -- 0=Sun .. 6=Sat
+    local DOW       = {"S","M","T","W","T","F","S"}
     local values   = {}
     local counts   = {}
     local colNames = {}
@@ -1567,15 +1570,15 @@ local function Orction_UpdatePriceGraph(name)
         values[i] = entry["day" .. i .. "Price"] or 0
         counts[i] = entry["day" .. i .. "Count"] or 0
         local daysAgo = math.mod(todaySlot - i + 7, 7)
-        if daysAgo == 0 then
-            colNames[i] = "Today"
-        elseif daysAgo == 1 then
-            colNames[i] = "Yesterday"
-        else
-            colNames[i] = daysAgo .. "d ago"
-        end
+        local dow     = math.mod(todayDow - daysAgo + 7, 7) + 1
+        colNames[i]   = DOW[dow]
     end
-    orctionPriceBarGraph:SetData(values, colNames, "positive", counts)
+    local graphStyle  = ORCTION_GRAPH_STYLE or "positive"
+    local graphCounts = (graphStyle == "positive") and counts or nil
+    orctionPriceBarGraph:SetData(values, colNames, graphStyle, graphCounts, {
+        showLabels = true,
+        todayIndex = todaySlot,
+    })
 end
 
 -- Populates the post panel with item info from a result row click (no sell-slot item).
@@ -1599,6 +1602,7 @@ Orction_PreviewItem = function(name, texture, vendorPrice)
         end
     end
     if OrctionCreateBtn then OrctionCreateBtn:Disable() end
+    orctionCurrentPreviewName = name
     Orction_UpdatePriceGraph(name)
 end
 
@@ -1624,6 +1628,7 @@ local function Orction_CompleteItemDrop(name, texture, count)
     Orction_UpdateDeposit()
     Orction_FlushWriteQueue()  -- preserve pending data before StartSearch wipes the queue
     Orction_StartSearch(name, 0, 0)
+    orctionCurrentPreviewName = name
     Orction_UpdatePriceGraph(name)
 end
 
@@ -2637,8 +2642,8 @@ local function Orction_BuildAHPanel()
     OrctionCreateBtn:SetScript("OnClick", Orction_CreateAuction)
     OrctionCreateBtn:Disable()
 
-    -- Price history bar graph (positioned below the Create Auction button)
-    orctionPriceBarGraph = OrctionBarGraph_Create(OrctionAHPanel, 196, 64)
+    -- Price history bar graph
+    orctionPriceBarGraph = OrctionBarGraph_Create(OrctionAHPanel, 157, 52)
     orctionPriceBarGraph.frame:SetPoint("TOPLEFT", OrctionCreateBtn, "BOTTOMLEFT", -12, -8)
 
     local watchlistToggleBtn = CreateFrame("Button", nil, OrctionAHPanel, "UIPanelButtonTemplate")

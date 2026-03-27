@@ -176,6 +176,9 @@ local function OrctionPostal_OpenAllNext()
     local idx = OrctionPostal_FindNextMail()
     if not idx then
         OrctionPostal_OpenAllStop("all mail opened (" .. openAllOpened .. " total)")
+        if MiniMapMailFrame and MiniMapMailFrame.Hide and GetInboxNumItems and GetInboxNumItems() == 0 then
+            MiniMapMailFrame:Hide()
+        end
         return
     end
     TakeInboxItem(idx)
@@ -311,6 +314,9 @@ postalEvents:SetScript("OnEvent", function()
             -- Schedule next open after the configured inter-open delay
             openAllDelayPending = true
             openAllDelayElapsed = 0
+        end
+        if not OrctionPostal_FindNextMail() and MiniMapMailFrame and MiniMapMailFrame.Hide then
+            MiniMapMailFrame:Hide()
         end
         OrctionPostal_UpdateButtons()
     end

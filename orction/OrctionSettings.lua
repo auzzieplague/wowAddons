@@ -330,6 +330,32 @@ vendorMultSlider:SetScript("OnValueChanged", function()
 end)
 
 
+local graphStyleLabel = auctionPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+graphStyleLabel:SetPoint("TOPLEFT", vendorMultSlider, "BOTTOMLEFT", 0, -16)
+graphStyleLabel:SetText("Price Graph Style")
+
+local graphConfCheck = CreateFrame("CheckButton", "OrctionGraphConfCheck", auctionPanel, "OptionsCheckButtonTemplate")
+graphConfCheck:SetPoint("TOPLEFT", graphStyleLabel, "BOTTOMLEFT", 0, -4)
+getglobal("OrctionGraphConfCheckText"):SetText("Confidence")
+
+local graphFullCheck = CreateFrame("CheckButton", "OrctionGraphFullCheck", auctionPanel, "OptionsCheckButtonTemplate")
+graphFullCheck:SetPoint("LEFT", graphConfCheck, "RIGHT", 80, 0)
+getglobal("OrctionGraphFullCheckText"):SetText("Full")
+
+graphConfCheck:SetScript("OnClick", function()
+    ORCTION_GRAPH_STYLE = "positive"
+    graphConfCheck:SetChecked(1)
+    graphFullCheck:SetChecked(nil)
+    if OrctionDB and OrctionDB.settings then OrctionDB.settings.graphStyle = "positive" end
+end)
+
+graphFullCheck:SetScript("OnClick", function()
+    ORCTION_GRAPH_STYLE = "price"
+    graphConfCheck:SetChecked(nil)
+    graphFullCheck:SetChecked(1)
+    if OrctionDB and OrctionDB.settings then OrctionDB.settings.graphStyle = "price" end
+end)
+
 -------------------------------------------------------------------------------
 -- TAB 2: Post
 -------------------------------------------------------------------------------
@@ -1017,6 +1043,7 @@ settingsEventFrame:SetScript("OnEvent", function()
         if s.syncEnabled      == nil then s.syncEnabled      = true  end
         if s.syncChannel      == nil then s.syncChannel      = "GUILD" end
         if s.confidenceFactor == nil then s.confidenceFactor = 1.0   end
+        if s.graphStyle       == nil then s.graphStyle       = "positive" end
 
         -- Sync exact match checkbox
         if OrctionExactMatchCheck then
@@ -1037,6 +1064,14 @@ settingsEventFrame:SetScript("OnEvent", function()
         ORCTION_SYNC_ENABLED      = s.syncEnabled and 1 or 0
         ORCTION_SYNC_CHANNEL      = s.syncChannel
         ORCTION_CONFIDENCE_FACTOR = s.confidenceFactor
+        ORCTION_GRAPH_STYLE       = s.graphStyle
+
+        if OrctionGraphConfCheck then
+            OrctionGraphConfCheck:SetChecked(s.graphStyle == "positive" and 1 or nil)
+        end
+        if OrctionGraphFullCheck then
+            OrctionGraphFullCheck:SetChecked(s.graphStyle == "price" and 1 or nil)
+        end
 
         -- Ensure persistent tables exist
         if not OrctionDB.vendorPrices then OrctionDB.vendorPrices = {} end
