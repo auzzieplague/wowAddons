@@ -21,7 +21,7 @@ local orctionWaitTimeout     = 0     -- seconds waiting for non-zero batch on cu
 local orctionResponseReceived = false -- true once AUCTION_ITEM_LIST_UPDATE has fired for this query
 local orctionPendingPost     = nil   -- { name, startBid, buyout, count, stacksLeft, totalStacks }
 local orctionPriceBarGraph   = nil   -- bar-graph widget for item price history
-local orctionCurrentPreviewName = nil         -- name of item currently shown in the post panel
+orctionCurrentPreviewName = nil         -- name of item currently shown in the post panel (global: referenced from OnUpdate)
 local orctionPendingDrop     = nil   -- { name, texture, count } while confirm dialog is open
 local orctionVendorPrice     = nil   -- vendor sell price (copper) for the current search item
 local orctionSellName        = nil   -- name of the item currently in the sell slot (for Create Auction)
@@ -1049,6 +1049,10 @@ local function Orction_DisplayResults()
             groupMap[k].quality     = item.quality
             groupMap[k].seller      = item.owner or ""
         end
+        -- Fill in seller name if the current stored seller is blank
+        if groupMap[k].seller == "" and (item.owner or "") ~= "" then
+            groupMap[k].seller = item.owner
+        end
     end
     table.sort(groups, function(a, b) return a.costPerItem < b.costPerItem end)
 
@@ -1353,6 +1357,7 @@ local function Orction_CollectPage()
         else
             Orction_DisplayResults()
             if OrctionSearchingText then OrctionSearchingText:SetText("Search complete") ; OrctionSearchingText:Show() end
+            if orctionCurrentPreviewName then Orction_UpdatePriceGraph(orctionCurrentPreviewName) end
         end
     end
 end
@@ -2282,6 +2287,7 @@ local function Orction_AHPanel_OnUpdate()
                 else
                     Orction_DisplayResults()
                     if OrctionSearchingText then OrctionSearchingText:SetText("Search complete") ; OrctionSearchingText:Show() end
+                    if orctionCurrentPreviewName then Orction_UpdatePriceGraph(orctionCurrentPreviewName) end
                 end
             end
         end
