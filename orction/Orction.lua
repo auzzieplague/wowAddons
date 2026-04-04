@@ -616,7 +616,7 @@ local function Orction_CreateResultRow(i)
             local row = orctionResultRows[idx]
             if row and row.costPerItem then
                 local count = math.max(1, tonumber(OrctionCountBox:GetText()) or 1)
-                MoneyInputFrame_SetCopper(OrctionBuyout, row.costPerItem * count)
+                MoneyInputFrame_SetCopper(OrctionBuyout, math.max(1, row.costPerItem * count - 1))
             end
         end)
     end)
@@ -643,7 +643,7 @@ local function Orction_CreateResultRow(i)
             local row = orctionResultRows[idx]
             if row and row.costPerItem then
                 local count = math.max(1, tonumber(OrctionCountBox:GetText()) or 1)
-                MoneyInputFrame_SetCopper(OrctionBuyout, row.costPerItem * count)
+                MoneyInputFrame_SetCopper(OrctionBuyout, math.max(1, row.costPerItem * count - 1))
             end
         end)
     end)
@@ -664,7 +664,7 @@ local function Orction_CreateResultRow(i)
             -- Item dropped: fill buyout price
             if row.costPerItem then
                 local count = math.max(1, tonumber(OrctionCountBox:GetText()) or 1)
-                MoneyInputFrame_SetCopper(OrctionBuyout, row.costPerItem * count)
+                MoneyInputFrame_SetCopper(OrctionBuyout, math.max(1, row.costPerItem * count - 1))
             end
         end
     end)
@@ -1105,7 +1105,7 @@ local function Orction_DisplayResults()
     -- Auto-set buyout: cheapest exact match, or vendor × multiplier when no results
     if hasResults and not orctionShowingSimilar and OrctionCountBox then
         local count = math.max(1, tonumber(OrctionCountBox:GetText()) or 1)
-        MoneyInputFrame_SetCopper(OrctionBuyout, groups[1].costPerItem * count)
+        MoneyInputFrame_SetCopper(OrctionBuyout, math.max(1, groups[1].costPerItem * count - 1))
     elseif not hasResults and orctionSellName and orctionVendorPrice and orctionVendorPrice > 0 and OrctionCountBox and OrctionBuyout then
         local count = math.max(1, tonumber(OrctionCountBox:GetText()) or 1)
         MoneyInputFrame_SetCopper(OrctionBuyout, math.floor(orctionVendorPrice * (ORCTION_VENDOR_MULTIPLIER or 5.0)) * count)
