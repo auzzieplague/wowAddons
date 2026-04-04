@@ -58,9 +58,6 @@ local ORCTION_MAX_RETRIES      = 2    -- maximum retries per query before giving
 local orctionSearchStartPage   = 0    -- first page of the current fetch batch
 local orctionNextStartPage     = 0    -- page to start from when "Next Page" is clicked
 local orctionHasMorePages      = false -- true when pagination stopped at ORCTION_MAX_PAGES, not at exhaustion
-local orctionBuyBidPlaced      = false -- PlaceAuctionBid was called; waiting for confirmation
-local orctionBuyBidTimeout     = 0     -- seconds since bid was placed with no AUCTION_ITEM_LIST_UPDATE
-local orctionBuyBidRechecked   = false -- true after one fallback re-query was fired
 local orctionPriceWriteQueue   = {}    -- {itemId, name, price} items waiting for async DB write
 local orctionSellerFilter      = nil   -- player name to filter results by (nil = no filter)
 local orctionCurrentGroups     = {}    -- last displayed groups (one entry per result row)
@@ -604,10 +601,31 @@ local function Orction_CreateResultRow(i)
     local idx = i
     buyBtn:SetScript("OnClick", function()
         local row = orctionResultRows[idx]
-        if row and row.firstBuyout and row.itemName then
-            orctionBuyPending = { buyout = row.firstBuyout, name = row.itemName }
-            Orction_Query(row.itemName, 0)
+        if not row or not row.firstBuyout or not row.itemName then return end
+        local buyBuyout = row.firstBuyout
+        local buyName   = row.itemName
+        -- Try immediate buy from the already-loaded AH list (no server round-trip needed).
+        for i = 1, GetNumAuctionItems("list") do
+            local name, _, _, _, _, _, _, _, bp = GetAuctionItemInfo("list", i)
+            if name == buyName and bp == buyBuyout then
+                PlaceAuctionBid("list", i, bp)
+                for j = 1, table.getn(orctionSearchResults) do
+                    if orctionSearchResults[j].buyout == buyBuyout and orctionSearchResults[j].name == buyName then
+                        table.remove(orctionSearchResults, j) break
+                    end
+                end
+                for j = 1, table.getn(orctionSimilarResults) do
+                    if orctionSimilarResults[j].buyout == buyBuyout and orctionSimilarResults[j].name == buyName then
+                        table.remove(orctionSimilarResults, j) break
+                    end
+                end
+                Orction_DisplayResults()
+                return
+            end
         end
+        -- Item not in current view (different page or already gone) — re-query to confirm.
+        orctionBuyPending = { buyout = buyBuyout, name = buyName }
+        Orction_Query(buyName, 0)
     end)
 
     buyBtn:SetScript("OnMouseDown", function() this:GetParent():SetScript("OnClick", nil) end)
@@ -963,7 +981,7 @@ end
 
 -- ── Search logic ──────────────────────────────────────────────────────────
 
-local function Orction_DisplayResults()
+function Orction_DisplayResults()
     local nextPageBtn = getglobal("OrctionNextPageBtn")
     if nextPageBtn then
         if orctionHasMorePages and not orctionSearchActive then nextPageBtn:Enable()
@@ -1422,13 +1440,10 @@ end
 local function Orction_TryBuy()
     if not orctionBuyPending then return end
     local batch = GetNumAuctionItems("list")
-    if batch == 0 then return end  -- loading event; wait for real data
+    if batch == 0 then return end  -- no list loaded yet; wait for real data
 
     local buyName   = orctionBuyPending.name or orctionSearchName
     local buyBuyout = orctionBuyPending.buyout
-
-    -- Reset the bid confirmation timer — we got a real response.
-    orctionBuyBidTimeout = 0
 
     local function removeFirst(t)
         for j = 1, table.getn(t) do
@@ -1438,41 +1453,15 @@ local function Orction_TryBuy()
         end
     end
 
-    if orctionBuyBidPlaced then
-        -- A bid was placed; check whether the item is now gone (success) or still present (cooldown).
-        for i = 1, batch do
-            local name, _, _, _, _, _, _, _, buyoutPrice = GetAuctionItemInfo("list", i)
-            if name == buyName and buyoutPrice == buyBuyout then
-                -- Item still there — bid on cooldown. Clear state so user can retry manually.
-                orctionBuyPending      = nil
-                orctionBuyBidPlaced    = false
-                orctionBuyBidRechecked = false
-                DEFAULT_CHAT_FRAME:AddMessage("Orction: bid on cooldown — click Buy to try again.")
-                return
-            end
-        end
-        -- Item gone — purchase confirmed.
-        removeFirst(orctionSearchResults)
-        removeFirst(orctionSimilarResults)
-        orctionBuyPending      = nil
-        orctionBuyBidPlaced    = false
-        orctionBuyBidRechecked = false
-        Orction_DisplayResults()
-        return
-    end
-
-    -- First attempt: find and bid on the item.
+    -- Find and bid on the item.
     for i = 1, batch do
         local name, _, _, _, _, _, _, _, buyoutPrice = GetAuctionItemInfo("list", i)
         if name == buyName and buyoutPrice == buyBuyout then
             PlaceAuctionBid("list", i, buyoutPrice)
             -- Optimistic update: remove from local cache and refresh display immediately.
-            -- Waiting for server confirmation would fail to update when identical listings exist.
             removeFirst(orctionSearchResults)
             removeFirst(orctionSimilarResults)
-            orctionBuyPending      = nil
-            orctionBuyBidPlaced    = false
-            orctionBuyBidRechecked = false
+            orctionBuyPending = nil
             Orction_DisplayResults()
             return
         end
@@ -1481,8 +1470,7 @@ local function Orction_TryBuy()
     -- Auction not found — it sold or expired.
     removeFirst(orctionSearchResults)
     removeFirst(orctionSimilarResults)
-    orctionBuyPending   = nil
-    orctionBuyBidPlaced = false
+    orctionBuyPending = nil
     DEFAULT_CHAT_FRAME:AddMessage("Orction: auction not found (sold/expired) — removed.")
     Orction_DisplayResults()
 end
@@ -1556,7 +1544,7 @@ local function Orction_FlushWriteQueue()
 end
 
 -- Loads 7-day price history for the given item name and refreshes the bar graph.
-local function Orction_UpdatePriceGraph(name)
+function Orction_UpdatePriceGraph(name)
     if not orctionPriceBarGraph then return end
     Orction_FlushWriteQueue()  -- ensure pending scan data is written before lookup
     local entry = OrctionData_GetItemHistory and OrctionData_GetItemHistory(nil, name)
@@ -2213,22 +2201,6 @@ local function Orction_AHPanel_OnUpdate()
             orctionPendingSellRead = false
             orctionSellPollElapsed = 0
             DEFAULT_CHAT_FRAME:AddMessage("Orction: sell slot read timed out")
-        end
-    end
-    if orctionBuyBidPlaced then
-        orctionBuyBidTimeout = orctionBuyBidTimeout + arg1
-        if orctionBuyBidTimeout >= 3.0 then
-            if not orctionBuyBidRechecked and orctionBuyPending then
-                orctionBuyBidRechecked = true
-                orctionBuyBidTimeout   = 0
-                Orction_Query(orctionBuyPending.name, 0)
-            else
-                orctionBuyPending      = nil
-                orctionBuyBidPlaced    = false
-                orctionBuyBidRechecked = false
-                orctionBuyBidTimeout   = 0
-                DEFAULT_CHAT_FRAME:AddMessage("Orction: buy confirmation timed out.")
-            end
         end
     end
     -- Drain the async price-write queue: process up to 10 items per tick.

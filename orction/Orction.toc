@@ -11,6 +11,7 @@ InfData.lua
 OrctionSync.lua
 DataManagement.lua
 OrctionPostbox.lua
+OrctionBags.lua
 OrctionVendorData.lua
 OrctionVendor.lua
 OrctionBarGraph.lua
