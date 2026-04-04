@@ -66,6 +66,8 @@ local orctionSellerFilter      = nil   -- player name to filter results by (nil 
 local orctionCurrentGroups     = {}    -- last displayed groups (one entry per result row)
 local orctionSearchRecorded    = {}    -- key→true: items already queued for recording this search
 
+local Orction_UpdatePriceGraph  -- forward declaration (defined later in file)
+
 -- ── Helpers ───────────────────────────────────────────────────────────────
 
 local function ResizeMoneyInputFrame(frameName)
@@ -739,6 +741,28 @@ function Orction_ShowOnMap(vname, zone, x, y)
         lbl:SetTextColor(1, 0.82, 0)
         pin.lbl = lbl
         pin:Hide()
+
+        -- Hide pin when map is closed
+        local origOnHide = WorldMapFrame:GetScript("OnHide")
+        WorldMapFrame:SetScript("OnHide", function()
+            if origOnHide then origOnHide() end
+            local p = getglobal("OrctionMapPin")
+            if p then p:Hide() end
+        end)
+
+        -- Hide pin when user navigates to a different zone
+        if not getglobal("OrctionMapPinWatcher") then
+            local watcher = CreateFrame("Frame", "OrctionMapPinWatcher")
+            watcher:RegisterEvent("WORLD_MAP_UPDATE")
+            watcher:SetScript("OnEvent", function()
+                local p = getglobal("OrctionMapPin")
+                if not p or not p:IsShown() then return end
+                local currentC, currentZ = GetCurrentMapContinent(), GetCurrentMapZone()
+                if currentC ~= p.tc or currentZ ~= p.tz then
+                    p:Hide()
+                end
+            end)
+        end
     end
 
     -- Stash target on pin so the deferred setter can read it
@@ -1556,7 +1580,7 @@ local function Orction_FlushWriteQueue()
 end
 
 -- Loads 7-day price history for the given item name and refreshes the bar graph.
-local function Orction_UpdatePriceGraph(name)
+Orction_UpdatePriceGraph = function(name)
     if not orctionPriceBarGraph then return end
     Orction_FlushWriteQueue()  -- ensure pending scan data is written before lookup
     local entry = OrctionData_GetItemHistory and OrctionData_GetItemHistory(nil, name)
